@@ -23,7 +23,10 @@ class MyImageSource:
         if path.startswith("http"):
             self.image_load_url(path)
         else:
-            self.image = self.image_load(path, height)
+            if size is None and not height:
+                self.image_load_file(path)
+            else:
+                self.image = self.image_load(path, height)
 
     def image_load_url(self, url: str):
         req = request.Request(url)
@@ -33,6 +36,9 @@ class MyImageSource:
         with request.urlopen(req) as img:
             self.pixmap = QPixmap()
             self.pixmap.loadFromData(img.read())
+
+    def image_load_file(self, path: str):
+        self.image = QImage(path)
 
     @synchronized_method
     def image_load(self, path: str, height: int):
@@ -124,6 +130,8 @@ class MyImageBox(QLabel):
 
 
 class MyImageDialog(QDialog):
+    FORMAT = ["jpg", "jpeg", "png"]
+
     def __init__(self, parent, path, max_size: QSize,
                  thumb=None, auto_confirm=False, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)

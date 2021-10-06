@@ -165,9 +165,6 @@ class MainWidget(QtWidgets.QWidget):
         self.show_info()
         # self.root_idx = self.model.setRootPath(settings.value("bitgirl/root"))
         # self.view.setRootIndex(self.root_idx)
-        mvlist = parse_movie("GVG-699")
-        for m in mvlist:
-            self.image_flow.addWidget(MovieWidget(m))
 
 
     @QtCore.Slot(str, result=None)

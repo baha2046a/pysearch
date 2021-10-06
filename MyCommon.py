@@ -61,7 +61,7 @@ def copy_file(src, des):
         print('Error: %s' % e.strerror)
 
 
-def download(url, folder, file=None):
+def download(url: str, folder, file: str = None):
     path = file
 
     if not file:

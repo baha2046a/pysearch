@@ -2,14 +2,13 @@ import glob
 import os
 from typing import Any
 
-from PySide6 import QtGui
 from PySide6.QtCore import QStringListModel, Qt
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QListView, QStyle, QApplication
 
 
 class MyDirModel(QStringListModel):
     folder_icon = None
+    file_icon = None
 
     @staticmethod
     def list_dir_as_name(folder):
@@ -20,9 +19,12 @@ class MyDirModel(QStringListModel):
         return os.path.split(full_path)[1]
 
     @staticmethod
-    def list_dir(folder, custom="*"):
-        select = f"{folder}/{custom}"
-        return glob.glob(select)
+    def list_dir(folder, custom=None):
+        if custom:
+            select = f"{folder}/{custom}".replace("[", "[[]").replace("]", "[]]")
+            return glob.glob(select)
+        else:
+            return os.listdir(folder)
 
     @staticmethod
     def list_jpg(folder):
@@ -60,8 +62,15 @@ class MyDirModel(QStringListModel):
 
     def data(self, index, role=Qt.DisplayRole, *args, **kwargs):
         if role == Qt.DecorationRole:
-            if not MyDirModel.folder_icon:
-                MyDirModel.folder_icon = QApplication.style().standardIcon(QStyle.SP_DirIcon)
-            return MyDirModel.folder_icon  # QtGui.QColor('green')
+            filename = super().data(index, Qt.DisplayRole)
+            full = os.path.join(self.rootPath, filename)
+            if not os.path.isdir(full):
+                if not MyDirModel.file_icon:
+                    MyDirModel.file_icon = QApplication.style().standardIcon(QStyle.SP_FileIcon)
+                return MyDirModel.file_icon
+            else:
+                if not MyDirModel.folder_icon:
+                    MyDirModel.folder_icon = QApplication.style().standardIcon(QStyle.SP_DirIcon)
+                return MyDirModel.folder_icon  # QtGui.QColor('green') SP_FileIcon
         else:
             return super().data(index, role)

@@ -13,11 +13,15 @@ def clear_all(layout) -> None:
 
 class MyQtLayout(QBoxLayout):
     def add(self, item):
-        if isinstance(item, QWidget):
-            self.addWidget(item)
-        elif isinstance(item, QLayout):
-            self.addLayout(item)
-        return self
+        if item:
+            if isinstance(item, QWidget):
+                self.addWidget(item)
+            elif isinstance(item, QLayout):
+                self.addLayout(item)
+            return self
+
+    def clear(self):
+        clear_all(self)
 
     def addAll(self, *args):
         for arg in args:
@@ -46,9 +50,10 @@ class MyVBox(QVBoxLayout, MyQtLayout):
 
 
 class MyButton(QPushButton):
-    def __init__(self, text, on_click, *args, **kwargs):
+    def __init__(self, text, on_click=None, *args, **kwargs):
         super().__init__(text, *args, **kwargs)
-        self.clicked.connect(on_click)
+        if on_click:
+            self.clicked.connect(on_click)
 
 
 class HorizontalLine(QFrame):

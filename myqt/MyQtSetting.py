@@ -20,6 +20,7 @@ class MySetting(QSettings):
 
 class SettingDialog(QDialog):
     changed = Signal()
+    FILTER = ["splitterSizes"]
 
     def __init__(self, parent, settings: MySetting, *groups):
         super().__init__(parent)
@@ -45,16 +46,17 @@ class SettingDialog(QDialog):
             self.key_lists[g] = settings.childKeys()
 
             for k in self.key_lists[g]:
-                txt_key = QLineEdit(self)
-                txt_key.setText(k)
-                txt_key.setReadOnly(True)
-                txt_val = QLineEdit(self)
-                txt_val.setText(str(settings.value(k)))
-                txt_val.setMinimumWidth(400)
-                self.val_lists[g].append(txt_val)
+                if k not in SettingDialog.FILTER:
+                    txt_key = QLineEdit(self)
+                    txt_key.setText(k)
+                    txt_key.setReadOnly(True)
+                    txt_val = QLineEdit(self)
+                    txt_val.setText(str(settings.value(k)))
+                    txt_val.setMinimumWidth(400)
+                    self.val_lists[g].append(txt_val)
 
-                h_box = MyHBox().addAll(txt_key, txt_val)
-                layout.addLayout(h_box)
+                    h_box = MyHBox().addAll(txt_key, txt_val)
+                    layout.addLayout(h_box)
 
             settings.endGroup()
 
@@ -69,8 +71,11 @@ class SettingDialog(QDialog):
     def save_settings(self):
         for g in self.groups:
             self.settings.beginGroup(g)
-            for i, k in enumerate(self.key_lists[g]):
-                self.settings.setValue(k, self.val_lists[g][i].text())
+            i = 0
+            for k in self.key_lists[g]:
+                if k not in SettingDialog.FILTER:
+                    self.settings.setValue(k, self.val_lists[g][i].text())
+                    i += 1
             self.settings.endGroup()
 
         self.changed.emit()

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
+from pathlib import Path
+from typing import List
 
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtCore import *
@@ -12,24 +16,24 @@ from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 from qt_material import apply_stylesheet
 
-from MyCommon import list_jpg, str_to_date
-from myparser.JavBusMain import parse_movie, save_info, load_info
-from myparser.MovieWidget import MovieWidget
-from myparser.ParserCommon import get_soup
+from MyCommon import list_jpg, str_to_date, list_dir
+from myparser import parse_url_get_images
+from myparser.CreateRecordDialog import CreateRecordDialog
+from myparser.FanzaMain import get_fanza_result, file_name_to_movie_id, get_all_fanza
+from myparser.InfoMovie import InfoMovie, load_movie_db, save_movie_db, load_info, save_info
+from myparser.MovieWidget import MovieWidget, RenameDialog
 from myqt.MyDirModel import MyDirModel
 from myqt.MyQtCommon import MyHBox, MyVBox, MyButton
 from myqt.MyQtFlow import MyQtScrollableFlow
 from myqt.MyQtImage import MyImageBox, MyImageSource, MyImageDialog
 from myqt.MyQtSetting import MySetting, SettingDialog
 from myqt.MyQtWorker import MyThread
-from myparser import search_dup, parse_url_get_images
-from myparser.CreateRecordDialog import CreateRecordDialog
 
 
 class MainWidget(QtWidgets.QWidget):
     info_out = Signal(str)
     image_signal = Signal(str, QSize, MyImageSource)
-    new_image_signal = Signal(str, QSize, MyImageSource)
+    new_movie_signal = Signal(InfoMovie)
     progress_reset_signal = Signal(int)
     progress_signal = Signal(int)
 
@@ -48,15 +52,11 @@ class MainWidget(QtWidgets.QWidget):
 
         self.but_settings = MyButton('Setting', self.action_settings)
         self.but_open_explorer = MyButton('Explorer', self.action_open_explorer)
-        self.but_find_dup = MyButton('Find Dup', self.action_find_dup)
         self.but_show_folder_images = MyButton('Show', self.action_show_folder_images)
-        self.but_new_record = MyButton('+', self.action_add_record)
 
         h_box_top_bar = MyHBox().addAll(self.but_settings,
                                         self.but_open_explorer,
-                                        self.but_find_dup,
-                                        self.but_show_folder_images,
-                                        self.but_new_record)
+                                        self.but_show_folder_images)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -65,30 +65,44 @@ class MainWidget(QtWidgets.QWidget):
 
         self.image_frame = MyImageBox(QSize(300, 240))
 
-        self.txt_url = QLineEdit("")
+        self.txt_move_path = QLineEdit("Folder")
         # self.txt_url.setReadOnly(True)
-        self.but_open_url = MyButton("Open", self.action_open_url)
+        self.but_up_path = MyButton("Up", self.action_up_path)
+        self.but_refresh_path = MyButton("Refresh", self.action_refresh_path)
+        self.but_move_to_download_folder = MyButton("Download", self.action_to_download_folder)
+        self.but_move_to_movie_folder = MyButton("Movie", self.action_to_movie_folder)
+        self.but_rename_path = MyButton("Rename", self.action_rename_path)
 
-        h_box_url = MyHBox().addAll(self.txt_url, self.but_open_url)
+        h_box_url = MyHBox().addAll(self.but_move_to_download_folder,
+                                    self.but_move_to_movie_folder,
+                                    self.but_refresh_path,
+                                    self.but_rename_path,
+                                    self.but_up_path)
 
-        self.txt_date = QLineEdit("")
-        self.but_recheck = MyButton("Check", self.action_recheck)
-        self.but_show_desc = MyButton("Desc", self.action_show_desc)
-        self.but_update = MyButton("Update", self.action_download_new_img)
+        self.txt_date = QLineEdit("Movie Control")
+        self.but_scan_all = MyButton('Scan All', self.action_get_all_movie)
+        self.but_recheck = MyButton("Scan", self.action_load_folder)
+        self.but_update = MyButton("Rename", self.action_rename)
+        self.but_mp4_to_folder = MyButton('+', self.action_mp4_to_folder)
+        self.but_delete_info = MyButton('-', self.action_delete_info)
 
         h_box_date = MyHBox().addAll(self.txt_date,
+                                     self.but_scan_all,
                                      self.but_recheck,
-                                     self.but_show_desc,
-                                     self.but_update)
+                                     self.but_update,
+                                     self.but_delete_info,
+                                     self.but_mp4_to_folder)
 
         self.view = QListView()
         self.model = MyDirModel(self)  # QFileSystemModel(self)  # QStringListModel()
         # self.model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
-        # self.model.setReadOnly(False)
+        # self.model.setReadOnly(True)
 
         self.view.setModel(self.model)
+        self.view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # self.view.setViewMode(QListView.IconMode)
         self.view.clicked.connect(self.action_list_click)
+        self.view.doubleClicked.connect(self.action_list_double_click)
 
         self.but_exit = MyButton('Exit', self.safe_exit)
 
@@ -107,6 +121,8 @@ class MainWidget(QtWidgets.QWidget):
         self.left_panel_widget.setFixedWidth(500)
 
         self.txt_info = [QLabel(self), QLabel(self), QLabel(self)]
+        for txt in self.txt_info:
+            txt.setMaximumWidth(1200)
 
         self.selected_path: str = ""
 
@@ -120,6 +136,9 @@ class MainWidget(QtWidgets.QWidget):
         self.splitter_right.addWidget(self.image_flow)
         self.splitter_right.addWidget(self.image_new_flow)
 
+        if settings.contains("movie/splitterSizes"):
+            self.splitter_right.restoreState(settings.value("movie/splitterSizes"))
+
         self.right_panel = MyVBox().addAll(self.splitter_right, *self.txt_info)
 
         layout = MyHBox().addAll(self.left_panel_widget, self.right_panel)
@@ -127,7 +146,7 @@ class MainWidget(QtWidgets.QWidget):
         self.setLayout(layout)
 
         self.thumb_size = QSize(140, 200)
-        self.selected_data = None
+        self.selected_data: InfoMovie = None
         self.update_delay = 0.001
         self.apply_settings()
 
@@ -135,7 +154,7 @@ class MainWidget(QtWidgets.QWidget):
         self.progress_reset_signal.connect(self.progress_bar.setMaximum)
         self.info_out.connect(self.action_info_out)
         self.image_signal.connect(self.action_show_img, Qt.QueuedConnection)
-        self.new_image_signal.connect(self.action_show_new_img, Qt.QueuedConnection)
+        self.new_movie_signal.connect(self.action_save_movie, Qt.QueuedConnection)
         # self.model.directoryLoaded.connect(self.model_loaded)
 
     def apply_settings(self):
@@ -150,6 +169,8 @@ class MainWidget(QtWidgets.QWidget):
         self.resize(n_size)
 
         # self.set_dir(settings.value("bitgirl/root"))
+
+        load_movie_db(settings.valueStr("movie/base"))
 
         self.selected_path = settings.valueStr("movie/last_selection", None)
 
@@ -169,8 +190,30 @@ class MainWidget(QtWidgets.QWidget):
         self.show_info()
 
     @Slot()
+    def action_list_double_click(self, index):
+        enter_path = os.path.join(self.model.rootPath, index.data()).replace("\\", "/")
+        print(enter_path)
+        if os.path.isdir(enter_path):
+            self.selected_path = None
+            self.model.setRootPath(enter_path)
+            settings.setValue("movie/root", enter_path)
+        else:
+            if enter_path.split(".")[-1].lower() in MyImageDialog.FORMAT:
+                dialog = MyImageDialog(self, enter_path, screen.availableGeometry().size())
+                dialog.exec()
+            else:
+                os.startfile(enter_path)
+
+    @Slot()
+    def action_up_path(self):
+        out_path = os.path.dirname(self.model.rootPath)
+        self.selected_path = None
+        self.model.setRootPath(out_path)
+        settings.setValue("movie/root", out_path)
+
+    @Slot()
     def action_settings(self):
-        dialog = SettingDialog(self, settings, "bitgirl")
+        dialog = SettingDialog(self, settings, "movie")
         if dialog.exec():
             self.apply_settings()
 
@@ -189,36 +232,57 @@ class MainWidget(QtWidgets.QWidget):
         self.image_new_flow.show_img(as_size, img, self.action_show_large_img)
 
     @Slot()
-    def action_find_dup(self):
-        if self.selected_path is not None:
-            dup_thread = MyThread("image_flow")
-            dup_thread.set_run(search_dup, self.selected_path, self.thumb_size,
-                               self.info_out, self.image_signal, self.new_image_signal,
-                               self.progress_reset_signal, self.progress_signal)
-            dup_thread.on_finish(on_before=self.action_find_dup_start)
-            dup_thread.start()
+    def action_rename(self):
+        if self.selected_path is not None and os.path.isdir(self.selected_path):
+            if self.selected_data and self.selected_data.path == self.selected_path:
+                self.image_flow.clearAll()
 
-    def action_find_dup_start(self):
-        self.image_new_flow.clearAll()
-        self.image_flow.clearAll()
-        self.image_flow.group_by_date = False
+                self.selected_data.rename()
+
+                self.model.setRootPath(self.model.rootPath)
+                self.selected_path = self.selected_data.path
+                self.model.makeSelect(self.selected_path, self.view)
+                self.show_info()
 
     @Slot()
-    def action_show_desc(self):
-        url = self.txt_url.text()
-        if url:
-            soup = get_soup(url)
-            div = soup.select("div[class=entry-desp]")
-            if div:
-                desc = div[0].contents[0]
-                if desc:
-                    # QMessageBox.about(self, "", str(desc))
-                    msgBox = QMessageBox(None, "", "", QMessageBox.Ok, self)
-                    msgBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                    msgBox.setText("<h2>" + str(desc) + "</h2>")
-                    msgBox.setWindowTitle("@" + url.split("/")[-1])
-                    msgBox.setWindowFlags(Qt.Tool | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-                    msgBox.exec()
+    def action_refresh_path(self):
+        self.selected_path = None
+        self.model.setRootPath(self.model.rootPath)
+
+    @Slot()
+    def action_delete_info(self):
+        if self.selected_data:
+            self.image_flow.clearAll()
+            self.selected_data.delete()
+
+    @Slot()
+    def action_rename_path(self):
+        if self.selected_path is not None:
+            dial = RenameDialog(self, self.selected_path)
+            if dial.exec():
+                out = dial.t_n.text()
+                out_path = os.path.join(self.model.rootPath, out).replace("\\", "/")
+                if not os.path.exists(out_path):
+                    shutil.move(self.selected_path, out_path)
+                    time.sleep(0.1)
+                    self.model.setRootPath(self.model.rootPath)
+
+                    self.selected_path = out_path
+                    self.model.makeSelect(out, self.view)
+                    self.show_info()
+                else:
+                    self.info_out.emit(out_path + " Already Exists")
+        self.model.setRootPath(self.model.rootPath)
+
+    @Slot()
+    def action_to_download_folder(self):
+        self.selected_path = None
+        self.model.setRootPath(settings.valueStr("movie/download"))
+
+    @Slot()
+    def action_to_movie_folder(self):
+        self.selected_path = None
+        self.model.setRootPath(settings.valueStr("movie/base"))
 
     @Slot()
     def action_open_explorer(self):
@@ -230,45 +294,42 @@ class MainWidget(QtWidgets.QWidget):
     def action_recheck(self):
         if self.selected_path is not None:
             folder = self.selected_path.split("/")[-1]
-            dialog = CreateRecordDialog(self, settings, folder, self.txt_url.text())
+            dialog = CreateRecordDialog(self, settings, folder, self.txt_move_path.text())
 
             if dialog.exec():
                 url = dialog.txt_url.text()
                 if url:
-                    self.txt_url.setText(url)
+                    self.txt_move_path.setText(url)
                     self.selected_data['url'] = url
 
     @Slot()
-    def action_add_record(self):
-        dialog = CreateRecordDialog(self, settings)
+    def action_mp4_to_folder(self):
+        if os.path.isfile(self.selected_path) and self.selected_path.endswith(".mp4"):
+            base = self.model.rootPath
+            folder_name = Path(self.selected_path).stem
 
-        if dialog.exec():
-            name = dialog.txt_name.text()
-            url = dialog.txt_url.text()
+            m = re.compile(r"\[([0-9A-Z]+?)-?(\d+)]").match(folder_name)
+            if m:
+                folder_name = f"[{m.groups()[0]}-{int(m.groups()[1]):03d}]"
+                new_file_name = os.path.join(base, folder_name + ".mp4").replace("\\", "/")
 
-            if name and url:
-                f = os.path.join(self.model.rootPath, name).replace("\\", "/")
+                shutil.move(self.selected_path, new_file_name)
+                self.selected_path = new_file_name
 
-                match = self.model.makeSelect(f)
+            new_folder = os.path.join(base, folder_name)
+            self.move_file_to_folder(self.selected_path, new_folder)
 
-                # match(self.model.index(0,0), Qt.DisplayRole, name, 1, Qt.MatchExactly)
-                if match:
-                    self.info_out.emit(f"Record {name} Already Exist")
+    def move_file_to_folder(self, file, folder):
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+            shutil.move(file, folder)
+            self.model.setRootPath(self.model.rootPath)
 
-                    self.selected_path = f
-                    self.view.setCurrentIndex(match)
-                    self.show_info()
-                else:
-
-                    if self.model.mkdir(f, self.view):
-                        self.info_out.emit(f"Create Directory: {f}")
-                        info = {'url': url, 'lastUpdate': "2000-01-01", 'count': -1}
-                        save_info(f, info)
-
-                        self.selected_path = f
-                        self.show_info()
-
-                # self.model_loaded(None)
+            self.selected_path = folder
+            self.model.makeSelect(folder, self.view)
+            self.show_info()
+        else:
+            self.move_file_to_folder(file, folder + " 1")
 
     @Slot()
     def action_show_folder_images(self):
@@ -312,7 +373,7 @@ class MainWidget(QtWidgets.QWidget):
 
     @Slot()
     def action_open_url(self):
-        url = self.txt_url.text()
+        url = self.txt_move_path.text()
         print(url)
         if url:
             webbrowser.open(url)
@@ -320,33 +381,94 @@ class MainWidget(QtWidgets.QWidget):
     def show_info(self):
         if self.selected_path is not None:
             # image = imutils.url_to_image("https://pbs.twimg.com/media/E_24DrNVUAIPlFe.jpg:small")
+            if os.path.isdir(self.selected_path) or self.selected_path.lower().endswith(".mp4"):
+                movie = load_info(self.selected_path)
+                if movie is not None and InfoMovie.LATEST == movie.version:
+                    self.local_movie_data(movie)
+                else:
+                    self.action_load_folder()
 
-            self.selected_data = load_info(self.selected_path)
-            if self.selected_data is not None:
-                self.image_flow.clearAll()
-                self.image_flow.addWidget(MovieWidget(self.selected_data))
+    @Slot()
+    def action_load_folder(self):
+        mid = file_name_to_movie_id(self.selected_path)
+        if mid:
+            self.image_flow.clearAll()
+            self.get_movie_data(mid)
+
+    @Slot()
+    def action_get_all_movie(self):
+        print(self.model.rootPath)
+        paths = list_dir(self.model.rootPath, "*/")
+        paths = list(map(lambda n: n.replace("\\", "/")[:-1], paths))
+
+        force = False
+        if settings.valueInt("movie/force_scan") == 1:
+            force = True
+
+        thread = MyThread("get_movie_data")
+        thread.set_run(get_all_fanza, paths, self.info_out, self.new_movie_signal,
+                       self.progress_reset_signal, self.progress_signal, force=force)
+        thread.on_finish(on_finish=self.action_get_all_movie_finish)
+        thread.start()
+
+    def action_get_all_movie_finish(self):
+        self.info_out.emit("Update Finish")
+
+    @Slot()
+    def action_save_movie(self, movie: InfoMovie):
+        if movie.path == self.selected_path:
+            print(threading.currentThread(), movie.movie_id)
+            w = MovieWidget(movie, local=False)
+            w.on_save.connect(self.local_movie_data)
+            self.image_flow.addWidget(w)
+
+    def get_movie_data(self, mid: str):
+        # print(get_fanza_result(mid))
+        self.image_flow.clearAll()
+        self.search_id = mid
+        print(mid)
+
+        thread = MyThread("get_movie_data")
+        thread.set_run(get_fanza_result, self.selected_path, mid, self.new_movie_signal)
+        thread.on_finish(on_result=self.get_movie_data_result)
+        thread.start()
+
+    def get_movie_data_result(self, movie: List[InfoMovie]):
+        if len(movie) and movie[0].path == self.selected_path:
+            if settings.value("movie/search_mode") == "same":
+                hits = []
+                for m in movie:
+                    print(m.movie_id, self.search_id)
+                    if m.movie_id == self.search_id:
+                        hits.append(m)
+                if hits:
+                    for m in hits:
+                        w = MovieWidget(m)
+                        w.on_save.connect(self.local_movie_data)
+                        self.image_flow.addWidget(w)
+                else:
+                    for m in movie:
+                        w = MovieWidget(m)
+                        w.on_save.connect(self.local_movie_data)
+                        self.image_flow.addWidget(w)
             else:
-                self.image_flow.clearAll()
-                m = re.search(r'\[[a-zA-Z]+-[0-9]+]', self.selected_path)
-                mid = m.group(0)
-                if mid:
-                    print(mid)
-                    movie = parse_movie(mid.replace("[", "").replace("]", ""))
-                    if len(movie):
-                        self.selected_data = movie[0]
-                        self.image_flow.addWidget(MovieWidget(movie[0]))
-                        save_info(self.selected_path, movie[0])
-        else:
-            self.txt_url.setText("")
-            self.txt_date.setText("")
+                for m in movie:
+                    w = MovieWidget(m)
+                    w.on_save.connect(self.local_movie_data)
+                    self.image_flow.addWidget(w)
+
+    def local_movie_data(self, movie: InfoMovie):
+        self.image_flow.clearAll()
+        self.selected_data = movie
+        self.image_flow.addWidget(MovieWidget(movie, local=True))
 
     @Slot()
     def action_download_new_img(self):
         if self.selected_path is not None:
-            self.selected_data['url'] = self.txt_url.text()
+            self.selected_data['url'] = self.txt_move_path.text()
             update_thread = MyThread("update_thread")
             update_thread.set_run(parse_url_get_images,
-                                  self.txt_url.text(),
+                                  self.txt_move_path.text(),
                                   str_to_date(self.txt_date.text()),
                                   self.selected_path,
                                   self.thumb_size,
@@ -379,7 +501,9 @@ class MainWidget(QtWidgets.QWidget):
 
     @QtCore.Slot()
     def safe_exit(self):
+        save_movie_db()
         settings.sync()
+        settings.setValue("movie/splitterSizes", self.splitter_right.saveState())
         settings.setValue("main/width", self.width())
         settings.setValue("main/height", self.height())
         self.deleteLater()
@@ -393,8 +517,16 @@ if __name__ == '__main__':
 
     settings = MySetting("soft.jp", "Manager")
 
+    if not settings.contains("movie/search_mode"):
+        settings.setValue("movie/search_mode", "same")
     if not settings.contains("movie/root"):
         settings.setValue("movie/root", "X:/Movies/AV/(Glory Quest)")
+    if not settings.contains("movie/base"):
+        settings.setValue("movie/base", "X:/Movies/AV")
+    if not settings.contains("movie/download"):
+        settings.setValue("movie/download", "C:/Users/baha2/Downloads")
+    if not settings.contains("movie/force_scan"):
+        settings.setValue("movie/force_scan", "0")
 
     print("Create App")
 

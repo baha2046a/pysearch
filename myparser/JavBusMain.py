@@ -1,36 +1,25 @@
-import json
-import os
-
 from myparser import get_soup
-from myparser.InfoMovie import InfoMovie
+from myparser.InfoMovie import InfoMovie, InfoMaker, InfoLabel, InfoDirector, InfoActor, InfoKeyword
 
 root = "https://www.javbus.com"
 
 
-def load_info(path):
-    info_path = os.path.join(path, InfoMovie.FILE)
-    try:
-        with open(info_path, encoding="utf-8") as f:
-            data = json.load(f)
-            return InfoMovie(**data)
-    except Exception as e:
-        print(e)
-        return None
+def as_javbus_mid(movie_id: str):
+    mid = movie_id.split("-")
+    if len(mid) > 1:
+        if len(mid[1]) == 2:
+            return f"{mid[0]}-0{mid[1]}"
+        if len(mid[1]) == 1:
+            return f"{mid[0]}-00{mid[1]}"
+    return movie_id
 
 
-def save_info(path, data: InfoMovie):
-    if data is not None:
-        info_path = os.path.join(path, InfoMovie.FILE)
-        try:
-            with open(info_path, 'w', encoding='utf-8') as f:
-                json.dump(data.__dict__, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(e)
-        finally:
-            f.close()
+def parse_javbus_movie(path: str, movie_id: str):
+    if not movie_id:
+        return []
 
+    movie_id = as_javbus_mid(movie_id)
 
-def parse_movie(movie_id: str):
     s_url = f"https://www.javbus.com/ja/search/{movie_id}"
     f_url = f"https://www.javbus.com/ja/{movie_id}"
 
@@ -45,7 +34,10 @@ def parse_movie(movie_id: str):
             if f"/{movie_id.upper()}" in e.attrs['href']:
                 grid = parse_cell(e)
                 if grid:
-                    e_list.append(parse_detail(grid))
+                    m = parse_detail(grid)
+                    if m:
+                        m.path = path
+                        e_list.append(m)
     return e_list
 
 
@@ -72,9 +64,10 @@ def parse_detail(result):
     m_id, url, title, front = result
     soup = get_soup(url)
     if soup:
-        director, d_link = find_span_get_pair(soup, "監督:")
-        maker, m_link = find_span_get_pair(soup, "メーカー:")
-        label, l_link = find_span_get_pair(soup, "レーベル:")
+
+        director = InfoDirector.add(*find_span_get_pair(soup, "監督:"))
+        maker = InfoMaker.add(*find_span_get_pair(soup, "メーカー:"))
+        label = InfoLabel.add(*find_span_get_pair(soup, "レーベル:"))
         series, s_link = find_span_get_pair(soup, "シリーズ:")
 
         date_e = soup.find("span", text="発売日:")
@@ -99,11 +92,11 @@ def parse_detail(result):
         for g in genre_e:
             a = g.find("a")
             if a:
-                genre.append(a.text)
+                genre.append(InfoKeyword.add(a.text, {"javbus": a.attrs['href']}))
                 # genre.append((a.text, a.attrs['href']))
 
         for a in actor_e:
-            actor.append(a.text)
+            actor.append(InfoActor.add(a.text, {"javbus": a.attrs['href']}))
             # actor.append((a.text, a.attrs['href']))
 
         # for e in soup.select("span"):
@@ -115,6 +108,7 @@ def parse_detail(result):
         else:
             back = None
 
+        """
         print(director)
         print(maker)
         print(label)
@@ -124,9 +118,14 @@ def parse_detail(result):
         print(genre)
         print(actor)
         print(back)
+        """
+
         return InfoMovie(m_id, "", back, front,
                          title, maker, label, date, series, length,
-                         "", director, actor, genre, None)
+                         "", director, actor, genre, None,
+                         link=url,
+                         version=InfoMovie.LATEST)
+    return None
 
 
 def find_span_get_pair(element, text):
@@ -134,5 +133,5 @@ def find_span_get_pair(element, text):
     if e:
         a = e.parent.find("a")
         if a:
-            return a.text, a.attrs['href']
-    return None, None
+            return a.text, {"javbus": a.attrs['href']}
+    return None, {}
