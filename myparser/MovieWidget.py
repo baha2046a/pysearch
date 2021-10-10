@@ -3,11 +3,12 @@ import webbrowser
 from typing import List
 
 from PySide6.QtCore import Slot, Signal
-from PySide6.QtWidgets import QWidget, QLineEdit, QDialog
+from PySide6.QtWidgets import QWidget, QLineEdit, QDialog, QLabel, QFrame
 
-from myparser.InfoMovie import InfoMovie, InfoKeyword, InfoActor
+from myparser.InfoMovie import InfoMovie, InfoKeyword, InfoActor, InfoLabel
 from myqt.MyQtCommon import MyHBox, MyVBox, MyButton
-from myqt.MyQtImage import MyImageBox
+from myqt.MyQtImage import MyImageBox, MyImageSource
+from myqt.MyQtSetting import EditDictDialog
 
 
 class RenameDialog(QDialog):
@@ -30,12 +31,30 @@ class EditMakerDialog(QDialog):
 
         self.t_l = QLineEdit(label)
         self.t_m = QLineEdit(maker)
+        self.b_map_l = MyButton("Map Label", self.map_label)
         self.b_ok = MyButton("Apply", self.accept)
         self.b_cancel = MyButton("Cancel", self.reject)
 
-        layout = MyVBox().addAll(self.t_l, self.t_m, self.b_ok, self.b_cancel)
+        layout = MyVBox().addAll(self.t_l, self.t_m,
+                                 self.b_map_l,
+                                 self.b_ok, self.b_cancel)
         self.setLayout(layout)
         self.resize(400, 200)
+
+    @Slot()
+    def map_label(self):
+        dial = EditDictDialog(InfoLabel.modify, self.t_l.text())
+        if dial.exec():
+            InfoLabel.modify = dial.get_result()
+            self.t_l.setText(InfoLabel.get(self.t_l.text()))
+
+
+def actor_suggest(word):
+    check = []
+    for name in InfoActor.data.keys():
+        if word in name:
+            check.append(name)
+    return check
 
 
 class EditActorDialog(QDialog):
@@ -82,7 +101,7 @@ class EditActorDialog(QDialog):
     @Slot()
     def action_hint(self):
         if self.txt_word.text():
-            check = self.actor_suggest(self.txt_word.text())
+            check = actor_suggest(self.txt_word.text())
             for i, txt in enumerate(self.suggest):
                 txt.setText("")
                 if len(check) > i:
@@ -93,15 +112,8 @@ class EditActorDialog(QDialog):
         url = f"http://sougouwiki.com/search?keywords={self.movie_id}"
         webbrowser.open(url)
 
-    def actor_suggest(self, word):
-        check = []
-        for name in InfoActor.data.keys():
-            if word in name:
-                check.append(name)
-        return check
 
-
-class MovieWidget(QWidget):
+class MovieWidget(QFrame):
     on_save = Signal(InfoMovie)
 
     def __init__(self, movie: InfoMovie, local=False, *args, **kwargs):
@@ -114,6 +126,10 @@ class MovieWidget(QWidget):
         f.setPointSize(20)
         self.txt_title.setFont(f)
         self.txt_title.setFixedHeight(50)
+
+        self.setFrameStyle(QFrame.WinPanel | QFrame.Raised)
+        self.setLineWidth(2)
+        self.setMaximumWidth(1500)
 
         """
         mid = movie.movie_id
@@ -130,7 +146,9 @@ class MovieWidget(QWidget):
         self.but_maker = MyButton(movie.maker)
         self.but_edit_maker = MyButton("Edit", self.action_edit_maker)
         self.but_edit_maker.setFixedWidth(90)
-        h_box_maker = MyHBox().addAll(self.but_label, self.but_maker, self.but_edit_maker)
+        self.but_play_mp4 = MyButton("Play", self.action_play_mp4)
+        self.but_play_mp4.setFixedWidth(90)
+        h_box_maker = MyHBox().addAll(self.but_label, self.but_maker, self.but_edit_maker, self.but_play_mp4)
 
         self.but_edit_actor = MyButton("Actor", self.action_edit_actor)
         self.but_edit_actor.setFixedWidth(90)
@@ -175,8 +193,10 @@ class MovieWidget(QWidget):
         h_box1 = MyHBox().addAll(self.txt_id, self.txt_date, self.txt_director,
                                  self.txt_len)
 
-        if movie.path[-4:-3] != ".":
+        if movie.path and movie.path[-4:-3] != ".":
             h_box1.add(self.but_save)
+        else:
+            self.but_play_mp4.setEnabled(False)
 
         v_box1 = MyVBox().addAll(h_box1,
                                  h_box_maker,
@@ -186,6 +206,13 @@ class MovieWidget(QWidget):
         h_box3 = MyHBox().addAll(self.thumb, v_box1)
         v_box2 = MyVBox().addAll(self.txt_title, h_box3, self.cover)
         self.setLayout(v_box2)
+
+    @Slot()
+    def action_play_mp4(self):
+        for file in os.listdir(self.movie.path):
+            if file.lower().endswith(".mp4"):
+                os.startfile(os.path.join(self.movie.path, file))
+                break
 
     @Slot()
     def action_edit_maker(self):
@@ -222,3 +249,34 @@ class MovieWidget(QWidget):
             self.movie.series = self.txt_series.text()
             self.movie.save()
             self.on_save.emit(self.movie)
+
+
+class MovieLiteWidget(QFrame):
+    on_view = Signal(str)
+
+    def __init__(self, info, cover=None, exist=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.t_id = QLineEdit(info['mid'])
+
+        if exist:
+            self.setStyleSheet("background-color: #ff1493;")
+            self.t_id.setStyleSheet("color: white;")
+
+        if cover:
+            self.cover = MyImageBox(image=cover)
+        else:
+            self.cover = MyImageBox.from_path(info['cover'])
+
+        self.cover.clicked.connect(self.action_view)
+
+        self.setFrameStyle(QFrame.WinPanel | QFrame.Raised)
+        self.setLineWidth(2)
+
+        layout = MyVBox().addAll(self.t_id, self.cover)#, self.t_title)
+        #layout.setContentsMargins(3, 3, 3, 3)
+        self.setLayout(layout)
+        self.setMaximumWidth(200)
+
+    @Slot()
+    def action_view(self):
+        self.on_view.emit(self.t_id.text())

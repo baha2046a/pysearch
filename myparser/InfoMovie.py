@@ -4,71 +4,40 @@ import os.path
 import re
 import shutil
 
+from PySide6.QtCore import Signal
+
+from FileCopyProgress import CopyProgress
 from MyCommon import download
+from myparser.InfoMovieItem import InfoMovieItem
+from myparser.MovieCache import MovieCache
 from myparser.MovieNameFix import movie_name_fix
-
-
-class InfoMovieItem:
-    @staticmethod
-    def _add(data, name, urls=None):
-        if name:
-            if name in data:
-                if urls:
-                    data[name].update(urls)
-            else:
-                if urls:
-                    data[name] = urls
-                else:
-                    data[name] = {}
-        return name
-
-    @staticmethod
-    def _get(data, name, urls=None):
-        if name:
-            if name in data:
-                if urls:
-                    data[name].update(urls)
-            else:
-                if urls:
-                    data[name] = urls
-                else:
-                    data[name] = {}
-            return name, data[name]
-        return None, {}
-
-    @staticmethod
-    def _load(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(e)
-            return {}
-
-    @staticmethod
-    def _save(path, data):
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(e)
-        finally:
-            f.close()
 
 
 class InfoMaker(InfoMovieItem):
     data = {}
+    mod_dir = {}
     path = ""
+    path_d = ""
     FILE = "py_maker.txt"
+    FILE_D = "py_maker_dir.txt"
 
     @staticmethod
     def load(path):
         InfoMaker.path = os.path.join(path, InfoMaker.FILE)
         InfoMaker.data = InfoMovieItem._load(InfoMaker.path)
+        InfoMaker.path_d = os.path.join(path, InfoMaker.FILE_D)
+        InfoMaker.mod_dir = InfoMovieItem._load(InfoMaker.path_d)
 
     @staticmethod
     def save():
         InfoMovieItem._save(InfoMaker.path, InfoMaker.data)
+        InfoMovieItem._save(InfoMaker.path_d, InfoMaker.mod_dir)
+
+    @staticmethod
+    def dir(name):
+        if name in InfoMaker.mod_dir:
+            return InfoMaker.mod_dir[name]
+        return name
 
     @staticmethod
     def add(name, urls=None):
@@ -81,18 +50,23 @@ class InfoMaker(InfoMovieItem):
 
 class InfoLabel(InfoMovieItem):
     data = {}
-    modify = {"MARXBrothersco.": "MARX Brothers co."}
+    modify = {}
     path = ""
+    path_m = ""
     FILE = "py_label.txt"
+    FILE_M = "py_label_m.txt"
 
     @staticmethod
     def load(path):
         InfoLabel.path = os.path.join(path, InfoLabel.FILE)
         InfoLabel.data = InfoMovieItem._load(InfoLabel.path)
+        InfoLabel.path_m = os.path.join(path, InfoLabel.FILE_M)
+        InfoLabel.modify = InfoMovieItem._load(InfoLabel.path_m)
 
     @staticmethod
     def save():
         InfoMovieItem._save(InfoLabel.path, InfoLabel.data)
+        InfoMovieItem._save(InfoLabel.path_m, InfoLabel.modify)
 
     @staticmethod
     def add(name, urls=None):
@@ -260,16 +234,25 @@ class InfoMovie:
         prefer_name = self.get_prefer_folder_name()
         if name != prefer_name:
             prefer_path = os.path.join(base, prefer_name).replace("\\", "/")
-            sub = 1
-            try_path = prefer_path
-            while os.path.exists(try_path):
-                try_path = f"{prefer_path} ({sub})"
+            self.move(prefer_path)
 
+    def move(self, prefer_path, txt_out: Signal = None, **kwargs):
+        print("Move")
+        sub = 1
+        try_path = prefer_path
+        while os.path.exists(try_path):
+            try_path = f"{prefer_path} ({sub})"
+            sub += 1
+
+        if txt_out:
+            CopyProgress(self.path, try_path, txt_out)
+            shutil.rmtree(self.path)
+        else:
             shutil.move(self.path, try_path)
-            self.path = try_path
-            self.back_img_path = self.get_back_img_path()
-            self.front_img_path = self.get_front_img_path()
-            save_info(self.path, self)
+        self.path = try_path
+        self.back_img_path = self.get_back_img_path()
+        self.front_img_path = self.get_front_img_path()
+        save_info(self.path, self)
 
     def save(self, is_retry=False):
         try:
@@ -316,6 +299,7 @@ def load_movie_db(movie_path: str):
     InfoSeries.load(movie_path)
     InfoKeyword.load(movie_path)
     InfoActor.load(movie_path)
+    MovieCache.load(movie_path)
 
 
 def save_movie_db():
@@ -325,6 +309,7 @@ def save_movie_db():
     InfoSeries.save()
     InfoKeyword.save()
     InfoActor.save()
+    MovieCache.save()
 
 
 def load_info(path):

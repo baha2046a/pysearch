@@ -1,5 +1,9 @@
+import threading
+
 from myparser import get_soup
 from myparser.InfoMovie import InfoMovie, InfoMaker, InfoLabel, InfoDirector, InfoActor, InfoKeyword
+from myparser.MovieCache import MovieCache
+from myqt.MyQtImage import MyImageSource
 
 root = "https://www.javbus.com"
 
@@ -12,6 +16,23 @@ def as_javbus_mid(movie_id: str):
         if len(mid[1]) == 1:
             return f"{mid[0]}-00{mid[1]}"
     return movie_id
+
+
+def get_javbus_series(movie_id: str):
+    cache = MovieCache.get(movie_id)
+    if cache:
+        return cache
+
+    s_url = f"https://www.javbus.com/ja/search/{movie_id}"
+    soup = get_soup(s_url)
+    print(movie_id, threading.current_thread().ident)
+    if soup:
+        elements = soup.select("a[class=movie-box]")
+        for e in elements:
+            if f"/{movie_id.upper()}" in e.attrs['href']:
+                m_id, url, title, img = parse_cell(e)
+                return {"mid": str(m_id), "title": str(title), "url": str(url), "cover": str(img)}
+    return {}
 
 
 def parse_javbus_movie(path: str, movie_id: str):

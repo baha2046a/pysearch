@@ -11,6 +11,8 @@ from myqt.MyQtImage import MyImageSource, MyImageBox
 
 
 class MyQtFlowLayout(QLayout):
+    add_to_front = False
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -25,7 +27,10 @@ class MyQtFlowLayout(QLayout):
             item = self.takeAt(0)
 
     def addItem(self, item: QLayoutItem) -> None:
-        self._item_list.append(item)
+        if MyQtFlowLayout.add_to_front:
+            self._item_list.insert(0, item)
+        else:
+            self._item_list.append(item)
 
     def count(self) -> int:
         return len(self._item_list)
@@ -144,7 +149,8 @@ class MyQtScrollableFlow(QScrollArea):
         self.setWidget(self.flow)
         self.setWidgetResizable(True)
 
-    def addWidget(self, item: QWidget) -> None:
+    def addWidget(self, item: QWidget, front=False) -> None:
+        MyQtFlowLayout.add_to_front = front
         self.flow.addWidget(item)
 
     def clearAll(self) -> None:

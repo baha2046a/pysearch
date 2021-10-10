@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import asyncio
 import os
 import re
 import shutil
@@ -21,7 +22,9 @@ from myparser import parse_url_get_images
 from myparser.CreateRecordDialog import CreateRecordDialog
 from myparser.FanzaMain import get_fanza_result, file_name_to_movie_id, get_all_fanza
 from myparser.InfoMovie import InfoMovie, load_movie_db, save_movie_db, load_info, save_info
-from myparser.MovieWidget import MovieWidget, RenameDialog
+from myparser.MovieMoveWidget import MovieMoveWidget
+from myparser.MovieSeries import PathSeriesWidget
+from myparser.MovieWidget import MovieWidget, RenameDialog, MovieLiteWidget
 from myqt.MyDirModel import MyDirModel
 from myqt.MyQtCommon import MyHBox, MyVBox, MyButton
 from myqt.MyQtFlow import MyQtScrollableFlow
@@ -32,6 +35,7 @@ from myqt.MyQtWorker import MyThread
 
 class MainWidget(QtWidgets.QWidget):
     info_out = Signal(str)
+    info_out_n = Signal(str)
     image_signal = Signal(str, QSize, MyImageSource)
     new_movie_signal = Signal(InfoMovie)
     progress_reset_signal = Signal(int)
@@ -52,11 +56,13 @@ class MainWidget(QtWidgets.QWidget):
 
         self.but_settings = MyButton('Setting', self.action_settings)
         self.but_open_explorer = MyButton('Explorer', self.action_open_explorer)
-        self.but_show_folder_images = MyButton('Show', self.action_show_folder_images)
+        self.but_move_movie = MyButton('Move', self.action_move_movie)
+        self.but_list_series = MyButton('Series', self.action_list_series)
 
         h_box_top_bar = MyHBox().addAll(self.but_settings,
                                         self.but_open_explorer,
-                                        self.but_show_folder_images)
+                                        self.but_move_movie,
+                                        self.but_list_series)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -125,6 +131,7 @@ class MainWidget(QtWidgets.QWidget):
             txt.setMaximumWidth(1200)
 
         self.selected_path: str = ""
+        self.movie_base = ""
 
         self.image_flow = MyQtScrollableFlow()
         self.image_new_flow = MyQtScrollableFlow()
@@ -153,6 +160,7 @@ class MainWidget(QtWidgets.QWidget):
         self.progress_signal.connect(self.progress_bar.setValue)
         self.progress_reset_signal.connect(self.progress_bar.setMaximum)
         self.info_out.connect(self.action_info_out)
+        self.info_out_n.connect(self.action_info_out_no_newline)
         self.image_signal.connect(self.action_show_img, Qt.QueuedConnection)
         self.new_movie_signal.connect(self.action_save_movie, Qt.QueuedConnection)
         # self.model.directoryLoaded.connect(self.model_loaded)
@@ -169,8 +177,8 @@ class MainWidget(QtWidgets.QWidget):
         self.resize(n_size)
 
         # self.set_dir(settings.value("bitgirl/root"))
-
-        load_movie_db(settings.valueStr("movie/base"))
+        self.movie_base = settings.valueStr("movie/base")
+        load_movie_db(self.movie_base)
 
         self.selected_path = settings.valueStr("movie/last_selection", None)
 
@@ -184,7 +192,7 @@ class MainWidget(QtWidgets.QWidget):
 
     @Slot()
     def action_list_click(self, index):
-        self.selected_path = os.path.join(self.model.rootPath, index.data())
+        self.selected_path = os.path.join(self.model.rootPath, index.data()).replace("\\", "/")
         print(self.selected_path)
         settings.setValue("movie/last_selection", self.selected_path)
         self.show_info()
@@ -221,6 +229,10 @@ class MainWidget(QtWidgets.QWidget):
     def action_info_out(self, mess):
         for i in range(0, len(self.txt_info) - 1):
             self.txt_info[i].setText(self.txt_info[i + 1].text())
+        self.txt_info[-1].setText(mess)
+
+    @Slot()
+    def action_info_out_no_newline(self, mess):
         self.txt_info[-1].setText(mess)
 
     @Slot()
@@ -316,7 +328,7 @@ class MainWidget(QtWidgets.QWidget):
                 shutil.move(self.selected_path, new_file_name)
                 self.selected_path = new_file_name
 
-            new_folder = os.path.join(base, folder_name)
+            new_folder = os.path.join(base, folder_name).replace("\\", "/")
             self.move_file_to_folder(self.selected_path, new_folder)
 
     def move_file_to_folder(self, file, folder):
@@ -332,16 +344,31 @@ class MainWidget(QtWidgets.QWidget):
             self.move_file_to_folder(file, folder + " 1")
 
     @Slot()
-    def action_show_folder_images(self):
-        if self.selected_path is not None:
-            run_thread = MyThread("image_flow")
-            run_thread.set_run(self.async_load_folder_images,
-                               self.selected_path,
-                               self.thumb_size)
-            run_thread.on_finish(on_before=self.action_show_folder_images_start)
-            run_thread.start()
+    def action_move_movie(self):
+        print(self.selected_path)
+        if self.selected_data is not None and self.selected_path == self.selected_data.path:
+            w = MovieMoveWidget(self.selected_data, self.movie_base)
+            self.image_flow.addWidget(w, front=True)
+            w.on_move.connect(self.action_move_movie_finish)
 
-            print(sys.getrefcount(run_thread))
+    @Slot()
+    def action_list_series(self):
+        w = PathSeriesWidget(self.model.rootPath)
+        self.image_new_flow.clearAll()
+        self.image_new_flow.addWidget(w, front=True)
+        w.output.connect(self.action_display_movie_lite)
+
+    def action_display_movie_lite(self, w: dict, cover, exist):
+        wg = MovieLiteWidget(w, cover, exist)
+        wg.on_view.connect(self.action_load_folder)
+        self.image_new_flow.addWidget(wg)
+
+    def action_move_movie_finish(self, path):
+        self.image_flow.clearAll()
+        self.model.setRootPath(os.path.dirname(path))
+        self.selected_path = path
+        self.model.makeSelect(self.selected_path, self.view)
+        self.show_info()
 
     def action_show_folder_images_start(self):
         self.image_flow.clearAll()
@@ -389,11 +416,13 @@ class MainWidget(QtWidgets.QWidget):
                     self.action_load_folder()
 
     @Slot()
-    def action_load_folder(self):
-        mid = file_name_to_movie_id(self.selected_path)
+    def action_load_folder(self, mid=None, path=None):
+        if not mid:
+            mid = file_name_to_movie_id(self.selected_path)
+            path = self.selected_path
         if mid:
             self.image_flow.clearAll()
-            self.get_movie_data(mid)
+            self.get_movie_data(path, mid)
 
     @Slot()
     def action_get_all_movie(self):
@@ -405,7 +434,7 @@ class MainWidget(QtWidgets.QWidget):
         if settings.valueInt("movie/force_scan") == 1:
             force = True
 
-        thread = MyThread("get_movie_data")
+        thread = MyThread("get_all_movie_data")
         thread.set_run(get_all_fanza, paths, self.info_out, self.new_movie_signal,
                        self.progress_reset_signal, self.progress_signal, force=force)
         thread.on_finish(on_finish=self.action_get_all_movie_finish)
@@ -422,19 +451,18 @@ class MainWidget(QtWidgets.QWidget):
             w.on_save.connect(self.local_movie_data)
             self.image_flow.addWidget(w)
 
-    def get_movie_data(self, mid: str):
+    def get_movie_data(self, path: str, mid: str):
         # print(get_fanza_result(mid))
         self.image_flow.clearAll()
         self.search_id = mid
-        print(mid)
 
         thread = MyThread("get_movie_data")
-        thread.set_run(get_fanza_result, self.selected_path, mid, self.new_movie_signal)
+        thread.set_run(get_fanza_result, path, mid, self.new_movie_signal)
         thread.on_finish(on_result=self.get_movie_data_result)
         thread.start()
 
     def get_movie_data_result(self, movie: List[InfoMovie]):
-        if len(movie) and movie[0].path == self.selected_path:
+        if len(movie):
             if settings.value("movie/search_mode") == "same":
                 hits = []
                 for m in movie:
@@ -459,6 +487,7 @@ class MainWidget(QtWidgets.QWidget):
 
     def local_movie_data(self, movie: InfoMovie):
         self.image_flow.clearAll()
+        movie.path = movie.path.replace("\\", "/")
         self.selected_data = movie
         self.image_flow.addWidget(MovieWidget(movie, local=True))
 
@@ -502,10 +531,11 @@ class MainWidget(QtWidgets.QWidget):
     @QtCore.Slot()
     def safe_exit(self):
         save_movie_db()
-        settings.sync()
+        settings.setValue("movie/last_selection", self.selected_path)
         settings.setValue("movie/splitterSizes", self.splitter_right.saveState())
         settings.setValue("main/width", self.width())
         settings.setValue("main/height", self.height())
+        settings.sync()
         self.deleteLater()
         self.close()
         self.destroy()

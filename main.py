@@ -5,7 +5,6 @@ import sys
 import time
 import webbrowser
 
-
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtCore import *
 from PySide6.QtGui import *
@@ -13,8 +12,8 @@ from PySide6.QtWidgets import *
 from qt_material import apply_stylesheet
 
 from MyCommon import list_jpg, str_to_date
-from myparser.JavBusMain import parse_movie
-from myparser.MovieWidget import MovieWidget
+from myparser import search_dup, save_info, load_info, parse_url_get_images
+from myparser.CreateRecordDialog import CreateRecordDialog
 from myparser.ParserCommon import get_soup
 from myqt.MyDirModel import MyDirModel
 from myqt.MyQtCommon import MyHBox, MyVBox, MyButton
@@ -22,8 +21,6 @@ from myqt.MyQtFlow import MyQtScrollableFlow
 from myqt.MyQtImage import MyImageBox, MyImageSource, MyImageDialog
 from myqt.MyQtSetting import MySetting, SettingDialog
 from myqt.MyQtWorker import MyThread
-from myparser import search_dup, save_info, load_info, parse_url_get_images
-from myparser.CreateRecordDialog import CreateRecordDialog
 
 
 class MainWidget(QtWidgets.QWidget):
@@ -165,7 +162,6 @@ class MainWidget(QtWidgets.QWidget):
         self.show_info()
         # self.root_idx = self.model.setRootPath(settings.value("bitgirl/root"))
         # self.view.setRootIndex(self.root_idx)
-
 
     @QtCore.Slot(str, result=None)
     def model_loaded(self, path):

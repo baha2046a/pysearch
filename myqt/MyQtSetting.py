@@ -1,7 +1,7 @@
 from PySide6.QtCore import QSettings, Signal, Qt, Slot
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QLineEdit
 
-from myqt.MyQtCommon import MyHBox, MyButton
+from myqt.MyQtCommon import MyHBox, MyButton, MyVBox
 
 
 class MySetting(QSettings):
@@ -80,3 +80,49 @@ class SettingDialog(QDialog):
 
         self.changed.emit()
         self.accept()
+
+
+class EditDictDialog(QDialog):
+    def __init__(self, in_dict, add=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.layout = MyVBox()
+        self.k_list = []
+        self.v_list = []
+        for k in in_dict:
+            self.layout.add(self.get_row(k, in_dict[k]))
+        self.but_new_row = MyButton("Add", self.new_row)
+        self.b_ok = MyButton("Apply", self.accept)
+        self.b_cancel = MyButton("Cancel", self.reject)
+        self.layout.addAll(self.but_new_row, self.b_ok, self.b_cancel)
+        if add:
+            self.new_row(add)
+        self.setLayout(self.layout)
+        self.resize(800, 200)
+
+    @Slot()
+    def new_row(self, key=""):
+        self.layout.add(self.get_row(key, ""))
+
+    def get_row(self, i, j):
+        k = QLineEdit(i)
+        v = QLineEdit(j)
+        self.k_list.append(k)
+        self.v_list.append(v)
+        return MyHBox().addAll(k, v)
+
+    def get_result(self):
+        r = {}
+        for v, k in enumerate(self.k_list):
+            key: str = k.text()
+            val: str = self.v_list[v].text()
+            if key and val:
+                r[key] = val
+        print(r)
+        return r
+
+
+
+
+
+
+
