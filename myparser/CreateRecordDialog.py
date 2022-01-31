@@ -2,7 +2,7 @@ from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QDialog, QLineEdit
 
 from myparser.ParserCommon import get_soup
-from myqt.MyQtCommon import MyButton, MyVBox
+from myqt.MyQtCommon import MyButton, MyVBox, MyPasteEdit
 from myparser import check
 from myqt.MyQtSetting import MySetting
 
@@ -15,7 +15,7 @@ class CreateRecordDialog(QDialog):
         self.p1 = None
         self.p2 = None
 
-        self.txt_name = QLineEdit()
+        self.txt_name = MyPasteEdit()
         self.txt_url = QLineEdit()
         if name:
             self.txt_name.setText(name)

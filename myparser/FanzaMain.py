@@ -3,44 +3,104 @@ import os.path
 import re
 import urllib.parse
 
+from PySide6.QtCore import QThread, Signal
+
+from TextOut import TextOut
 from myparser import get_html
-from myparser.InfoMovie import InfoKeyword, InfoSeries, InfoMaker, InfoLabel, InfoActor, InfoMovie, InfoDirector
+from myparser.InfoMovie import InfoKeyword, InfoSeries, InfoMaker, InfoLabel, InfoActor, InfoMovie, InfoDirector, \
+    load_info
 from myparser.JavBusMain import parse_javbus_movie
+from myparser.MovieCache import MovieCache
 from myparser.MovieNameFix import movie_name_fix
+from myqt.MyQtImage import MyImageSource
 
 api_id = "cKLxQzpehtWUh0bpBvTZ"
 affiliate_id = "joyusexy-990"
 service = ["mono", "digital", "rental"]
 
 
-def get_all_fanza(paths, out_txt, out_signal, progress_reset_signal, progress_signal, thread, force=False):
+def get_all_fanza(paths, progress_reset_signal, progress_signal,
+                  thread: QThread = None, force=False):
+
     progress_reset_signal.emit(len(paths))
     progress = 0
     for p in paths:
         progress += 1
         progress_signal.emit(progress)
         if not force and os.path.exists(os.path.join(p, InfoMovie.FILE)):
+            m = load_info(p)
+            if m:
+                MovieCache.put(m)
+                if m.actors:
+                    for a in m.actors:
+                        InfoActor.add(a)
+                if m.keywords:
+                    for g in m.keywords:
+                        InfoKeyword.add(g)
+                if m.director:
+                    InfoDirector.add(m.director)
+                if m.maker:
+                    InfoMaker.add(m.maker)
+                if m.label:
+                    InfoLabel.add(m.label)
+                if m.series:
+                    InfoSeries.add(m.series)
+
             continue
         key = file_name_to_movie_id(p)
-        out_txt.emit(f"Search For {key}...")
-        print(p)
-        try:
-            m = get_fanza_result(p, key, out_signal, thread, single_mode=True)
-            if len(m):
-                out_txt.emit(f"Save: {p} : {m[0].title}")
-                m[0].save()
-        except Exception as e:
-            out_txt.emit(e)
+        if key:
+            TextOut.out(f"Search For {key}...")
+            print(p)
+            try:
+                m = get_fanza_result(p, key, thread, single_mode=True)
+                if len(m):
+                    TextOut.out(f"Save: {p} : {m[0].title}")
+                    m[0].save()
+            except Exception as e:
+                TextOut.out(e)
 
 
-def get_fanza_result(path, keyword, out_signal, thread, single_mode=False):
-    modify_keyword = keyword
+def get_fanza_result(path, keyword, thread, single_mode=False) -> list:
     m = re.compile(r"(^[A-Z]+?)-?(\d+)").match(keyword)
     if m:
         modify_keyword = f"{m.groups()[0]}-{int(m.groups()[1]):05d}"
+        out = get_fanza(path, modify_keyword, thread, single_mode)
+        out.extend(get_fanza(path, keyword, thread, single_mode))
+    else:
+        out = get_fanza(path, keyword, thread, single_mode)
 
-    print(modify_keyword)
+    if thread.isInterruptionRequested():
+        return []
 
+    if len(out):
+        hits = []
+        result = []
+        for m in out:
+            if m.movie_id == keyword:
+                hits.append(m)
+        if hits:
+            for m in hits:
+                f = None
+                b = None
+                if m.front_img_url:
+                    f = MyImageSource(m.front_img_url, q_pix=False)
+                if m.back_img_url:
+                    b = MyImageSource(m.back_img_url, q_pix=False)
+                result.append((m, f, b))
+        else:
+            for m in out:
+                f = None
+                b = None
+                if m.front_img_url:
+                    f = MyImageSource(m.front_img_url, q_pix=False)
+                if m.back_img_url:
+                    b = MyImageSource(m.back_img_url, q_pix=False)
+                result.append((m, f, b))
+        return result
+    return []
+
+
+def get_fanza(path, keyword, thread: QThread, single_mode=False) -> list[InfoMovie]:
     movie_result = []
     param = {"api_id": api_id,
              "affiliate_id": affiliate_id,
@@ -48,7 +108,7 @@ def get_fanza_result(path, keyword, out_signal, thread, single_mode=False):
              "service": "",
              "hits": "50",
              "sort": "match",
-             "keyword": modify_keyword,
+             "keyword": keyword,
              "output": "json"}
     for s in service:
         param['service'] = s
@@ -64,6 +124,7 @@ def get_fanza_result(path, keyword, out_signal, thread, single_mode=False):
                     mid = item['maker_product']
                 else:
                     mid = pid
+                print(pid, mid, keyword)
 
                 if single_mode:
                     if mid != keyword:
@@ -123,6 +184,9 @@ def get_fanza_result(path, keyword, out_signal, thread, single_mode=False):
                                   date, series, length, None, director, actor, genres, None,
                                   link=link, version=InfoMovie.LATEST)
 
+                if thread.isInterruptionRequested():
+                    return []
+
                 if single_mode:
                     return [movie]
                 else:
@@ -135,8 +199,13 @@ def get_fanza_result(path, keyword, out_signal, thread, single_mode=False):
 
 
 def file_name_to_movie_id(path):
-    m = re.compile(r".*\[(.*)].*").match(os.path.basename(path))
-    if m:
-        return m.groups()[0].upper()
+    os_p: str = os.path.basename(path)
+    ws = os_p.split()
+    for w in ws:
+        if w.startswith("[") and w.endswith("]"):
+            print(w[1:-1])
+            return w[1:-1]
+    # m = re.compile(r".*\[(.*)].*").search(os.path.basename(path))
+    # if m:
+    # return m.groups()[0].upper()
     return None
-

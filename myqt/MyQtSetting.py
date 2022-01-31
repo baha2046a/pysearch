@@ -100,10 +100,12 @@ class EditDictDialog(QDialog):
         self.resize(800, 200)
 
     @Slot()
-    def new_row(self, key=""):
+    def new_row(self, key: str = "", checked: bool = False):
+        print(key)
         self.layout.add(self.get_row(key, ""))
 
-    def get_row(self, i, j):
+    def get_row(self, i: str, j: str):
+        print(i, j)
         k = QLineEdit(i)
         v = QLineEdit(j)
         self.k_list.append(k)
@@ -114,15 +116,10 @@ class EditDictDialog(QDialog):
         r = {}
         for v, k in enumerate(self.k_list):
             key: str = k.text()
-            val: str = self.v_list[v].text()
+            val: str = self.v_list[v].text()  # .lstrip("(").rstrip(")")
+            if len(val) > 2 and val.startswith("("):
+                val = val[1:-1]
             if key and val:
                 r[key] = val
         print(r)
         return r
-
-
-
-
-
-
-

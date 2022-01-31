@@ -1,14 +1,15 @@
 import threading
+from typing import Optional
 
 from myparser import get_soup
 from myparser.InfoMovie import InfoMovie, InfoMaker, InfoLabel, InfoDirector, InfoActor, InfoKeyword
-from myparser.MovieCache import MovieCache
+from urllib.parse import urlparse
 from myqt.MyQtImage import MyImageSource
 
 root = "https://www.javbus.com"
 
 
-def as_javbus_mid(movie_id: str):
+def as_javbus_mid(movie_id: str) -> str:
     mid = movie_id.split("-")
     if len(mid) > 1:
         if len(mid[1]) == 2:
@@ -18,10 +19,12 @@ def as_javbus_mid(movie_id: str):
     return movie_id
 
 
-def get_javbus_series(movie_id: str):
-    cache = MovieCache.get(movie_id)
-    if cache:
-        return cache
+def get_javbus_series(args) -> list:
+    movie_id = args[0]
+    data = args[1]
+
+    if movie_id in data:
+        return [data[movie_id], True, MyImageSource(data[movie_id]["cover"], q_pix=False)]
 
     s_url = f"https://www.javbus.com/ja/search/{movie_id}"
     soup = get_soup(s_url)
@@ -31,11 +34,12 @@ def get_javbus_series(movie_id: str):
         for e in elements:
             if f"/{movie_id.upper()}" in e.attrs['href']:
                 m_id, url, title, img = parse_cell(e)
-                return {"mid": str(m_id), "title": str(title), "url": str(url), "cover": str(img)}
-    return {}
+                return [{"mid": str(m_id), "title": str(title), "url": str(url), "cover": str(img)},
+                        False, MyImageSource(str(img), q_pix=False)]
+    return []
 
 
-def parse_javbus_movie(path: str, movie_id: str):
+def parse_javbus_movie(path: str, movie_id: str) -> list[InfoMovie]:
     if not movie_id:
         return []
 
@@ -64,10 +68,13 @@ def parse_javbus_movie(path: str, movie_id: str):
 
 def parse_cell(element):
     try:
-        m_id = element.select("div[class=photo-info] span date")[0].contents[0]
+        m_id: str = element.select("div[class=photo-info] span date")[0].contents[0]
 
         if not m_id:
             return None
+
+        if m_id.endswith("R"):
+            m_id = m_id[:-1]
 
         url = element.attrs['href']
         img_e = element.select("div[class=photo-frame] img")[0]
@@ -81,7 +88,16 @@ def parse_cell(element):
         return None
 
 
-def parse_detail(result):
+def javbus_url_to_id(url) -> str:
+    try:
+        p = urlparse(url)
+        return str(p.path.rsplit("/", 1)[-1])
+    except Exception as e:
+        print(e)
+        return ""
+
+
+def parse_detail(result) -> Optional[InfoMovie]:
     m_id, url, title, front = result
     soup = get_soup(url)
     if soup:
@@ -154,5 +170,5 @@ def find_span_get_pair(element, text):
     if e:
         a = e.parent.find("a")
         if a:
-            return a.text, {"javbus": a.attrs['href']}
+            return a.text, {"javbus": javbus_url_to_id(a.attrs['href'])}
     return None, {}

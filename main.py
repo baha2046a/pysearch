@@ -2,18 +2,20 @@
 import os
 import subprocess
 import sys
-import time
 import webbrowser
 
+import dill
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 from qt_material import apply_stylesheet
 
-from MyCommon import list_jpg, str_to_date
-from myparser import search_dup, save_info, load_info, parse_url_get_images
+from TextOut import TextOut
+from MyCommon import list_jpg, str_to_date, join_path
+from myparser import search_dup, parse_url_get_images
 from myparser.CreateRecordDialog import CreateRecordDialog
+from myparser.InfoImage import InfoImage
 from myparser.ParserCommon import get_soup
 from myqt.MyDirModel import MyDirModel
 from myqt.MyQtCommon import MyHBox, MyVBox, MyButton
@@ -29,6 +31,7 @@ class MainWidget(QtWidgets.QWidget):
     new_image_signal = Signal(str, QSize, MyImageSource)
     progress_reset_signal = Signal(int)
     progress_signal = Signal(int)
+    page_display = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -44,13 +47,11 @@ class MainWidget(QtWidgets.QWidget):
         """
 
         self.but_settings = MyButton('Setting', self.action_settings)
-        self.but_open_explorer = MyButton('Explorer', self.action_open_explorer)
         self.but_find_dup = MyButton('Find Dup', self.action_find_dup)
-        self.but_show_folder_images = MyButton('Show', self.action_show_folder_images)
+        self.but_show_folder_images = MyButton('Show', self.action_show_images_local)
         self.but_new_record = MyButton('+', self.action_add_record)
 
         h_box_top_bar = MyHBox().addAll(self.but_settings,
-                                        self.but_open_explorer,
                                         self.but_find_dup,
                                         self.but_show_folder_images,
                                         self.but_new_record)
@@ -78,14 +79,14 @@ class MainWidget(QtWidgets.QWidget):
                                      self.but_show_desc,
                                      self.but_update)
 
-        self.view = QListView()
-        self.model = MyDirModel(self)  # QFileSystemModel(self)  # QStringListModel()
+        self.model = MyDirModel()  # QFileSystemModel(self)  # QStringListModel()
         # self.model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
         # self.model.setReadOnly(False)
 
-        self.view.setModel(self.model)
         # self.view.setViewMode(QListView.IconMode)
-        self.view.clicked.connect(self.action_list_click)
+        self.model.signal_clicked.connect(self.action_list_click)
+        self.model.signal_double_clicked.connect(self.action_list_double_click)
+        self.model.view.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         self.but_exit = MyButton('Exit', self.safe_exit)
 
@@ -96,7 +97,8 @@ class MainWidget(QtWidgets.QWidget):
                                      self.image_frame,
                                      h_box_url,
                                      h_box_date,
-                                     self.view,
+                                     self.model.tool_bar,
+                                     self.model.view,
                                      h_box_bottom_bar)
 
         self.left_panel_widget = QWidget(self)
@@ -128,14 +130,17 @@ class MainWidget(QtWidgets.QWidget):
 
         self.thumb_size = QSize(140, 200)
         self.selected_data = None
-        self.update_delay = 0.001
+        self.download_retry = 10
         self.apply_settings()
 
         self.progress_signal.connect(self.progress_bar.setValue)
         self.progress_reset_signal.connect(self.progress_bar.setMaximum)
-        self.info_out.connect(self.action_info_out)
+        self.info_out.connect(self.action_info_out, Qt.QueuedConnection)
         self.image_signal.connect(self.action_show_img, Qt.QueuedConnection)
         self.new_image_signal.connect(self.action_show_new_img, Qt.QueuedConnection)
+        self.page_display.connect(self.action_show_page, Qt.QueuedConnection)
+
+        TextOut.out = self.info_out.emit
         # self.model.directoryLoaded.connect(self.model_loaded)
 
     def apply_settings(self):
@@ -149,17 +154,16 @@ class MainWidget(QtWidgets.QWidget):
         n_size = QSize(win_w, win_h).boundedTo(screen.availableGeometry().size())
         self.resize(n_size)
 
-        self.update_delay = settings.valueFloat("bitgirl/update_delay")
+        self.download_retry = settings.valueFloat("bitgirl/download_retry")
 
         # self.set_dir(settings.value("bitgirl/root"))
 
         self.selected_path = settings.valueStr("bitgirl/last_selection", None)
+        self.model.setRootPath(settings.valueStr("bitgirl/root"))
+        self.model.makeSelect(self.selected_path)
 
         print(self.selected_path)
-        self.model.setRootPath(settings.value("bitgirl/root"))
 
-        self.model.makeSelect(self.selected_path, self.view)
-        self.show_info()
         # self.root_idx = self.model.setRootPath(settings.value("bitgirl/root"))
         # self.view.setRootIndex(self.root_idx)
 
@@ -167,21 +171,33 @@ class MainWidget(QtWidgets.QWidget):
     def model_loaded(self, path):
         print("model_loaded")
         if self.selected_path:
-            self.model.makeSelect(self.selected_path, self.view)
+            self.model.makeSelect(self.selected_path)
             self.show_info()
 
     @Slot()
-    def action_list_click(self, index):
-        self.selected_path = os.path.join(self.model.rootPath, index.data())
-        print(self.selected_path)
-        settings.setValue("bitgirl/last_selection", self.selected_path)
-        self.show_info()
+    def action_list_click(self, path, _1, _2) -> None:
+        if path != self.selected_path:
+            self.selected_path = path
+            print(self.selected_path)
+            settings.setValue("bitgirl/last_selection", self.selected_path)
+            if path is not None and os.path.isdir(path):
+                self.show_info()
+
+    @Slot()
+    def action_list_double_click(self, path, _1, _2) -> None:
+        if path.split(".")[-1].lower() in MyImageDialog.FORMAT:
+            dialog = MyImageDialog(self, path, screen.availableGeometry().size())
+            dialog.exec()
+            dialog.deleteLater()
+        else:
+            os.startfile(path)
 
     @Slot()
     def action_settings(self):
         dialog = SettingDialog(self, settings, "bitgirl")
         if dialog.exec():
             self.apply_settings()
+        dialog.deleteLater()
 
     @Slot()
     def action_info_out(self, mess):
@@ -190,19 +206,21 @@ class MainWidget(QtWidgets.QWidget):
         self.txt_info[-1].setText(mess)
 
     @Slot()
-    def action_show_img(self, name, as_size, img: MyImageSource) -> None:
+    def action_show_img(self, _, as_size, img: MyImageSource) -> None:
         self.image_flow.show_img(as_size, img, self.action_show_large_img)
+        QCoreApplication.processEvents()
 
     @Slot()
-    def action_show_new_img(self, name, as_size, img: MyImageSource) -> None:
+    def action_show_new_img(self, _, as_size, img: MyImageSource) -> None:
         self.image_new_flow.show_img(as_size, img, self.action_show_large_img)
+        QCoreApplication.processEvents()
 
     @Slot()
     def action_find_dup(self):
         if self.selected_path is not None:
             dup_thread = MyThread("image_flow")
             dup_thread.set_run(search_dup, self.selected_path, self.thumb_size,
-                               self.info_out, self.image_signal, self.new_image_signal,
+                               self.image_signal, self.new_image_signal,
                                self.progress_reset_signal, self.progress_signal)
             dup_thread.on_finish(on_before=self.action_find_dup_start)
             dup_thread.start()
@@ -222,18 +240,12 @@ class MainWidget(QtWidgets.QWidget):
                 desc = div[0].contents[0]
                 if desc:
                     # QMessageBox.about(self, "", str(desc))
-                    msgBox = QMessageBox(None, "", "", QMessageBox.Ok, self)
-                    msgBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                    msgBox.setText("<h2>" + str(desc) + "</h2>")
-                    msgBox.setWindowTitle("@" + url.split("/")[-1])
-                    msgBox.setWindowFlags(Qt.Tool | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-                    msgBox.exec()
-
-    @Slot()
-    def action_open_explorer(self):
-        if self.selected_path is not None:
-            print(self.selected_path)
-            subprocess.Popen('explorer {}'.format(self.selected_path.replace('/', '\\')))
+                    msg_box = QMessageBox(None, "", "", QMessageBox.Ok, self)
+                    msg_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                    msg_box.setText("<h2>" + str(desc) + "</h2>")
+                    msg_box.setWindowTitle("@" + url.split("/")[-1])
+                    msg_box.setWindowFlags(Qt.Tool | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+                    msg_box.exec()
 
     @Slot()
     def action_recheck(self):
@@ -246,6 +258,7 @@ class MainWidget(QtWidgets.QWidget):
                 if url:
                     self.txt_url.setText(url)
                     self.selected_data['url'] = url
+            dialog.deleteLater()
 
     @Slot()
     def action_add_record(self):
@@ -256,47 +269,53 @@ class MainWidget(QtWidgets.QWidget):
             url = dialog.txt_url.text()
 
             if name and url:
-                f = os.path.join(self.model.rootPath, name).replace("\\", "/")
-
-                match = self.model.makeSelect(f)
+                match = self.model.makeSelect(name)
 
                 # match(self.model.index(0,0), Qt.DisplayRole, name, 1, Qt.MatchExactly)
                 if match:
                     self.info_out.emit(f"Record {name} Already Exist")
-
-                    self.selected_path = f
-                    self.view.setCurrentIndex(match)
-                    self.show_info()
                 else:
-
-                    if self.model.mkdir(f, self.view):
-                        self.info_out.emit(f"Create Directory: {f}")
-                        info = {'url': url, 'lastUpdate': "2000-01-01", 'count': -1}
-                        save_info(f, info)
-
-                        self.selected_path = f
-                        self.show_info()
+                    out_path, _ = self.model.mkdir(name)
+                    self.info_out.emit(f"Create Directory: {out_path}")
+                    info = {'url': url, 'lastUpdate': "2000-01-01", 'count': -1}
+                    InfoImage.save_info(out_path, info)
+                    self.show_info()
 
                 # self.model_loaded(None)
 
     @Slot()
-    def action_show_folder_images(self):
+    def action_show_images_local(self, page=0):
         if self.selected_path is not None:
             run_thread = MyThread("image_flow")
-            run_thread.set_run(self.async_load_folder_images,
+            run_thread.set_run(self.async_load_images_local,
                                self.selected_path,
-                               self.thumb_size)
-            run_thread.on_finish(on_before=self.action_show_folder_images_start)
+                               self.thumb_size, page)
+            run_thread.on_finish(on_before=self.action_show_images_start)
             run_thread.start()
 
             print(sys.getrefcount(run_thread))
 
-    def action_show_folder_images_start(self):
+    def action_show_images_start(self):
         self.image_flow.clearAll()
         self.image_flow.group_by_date = True
 
-    def async_load_folder_images(self, folder, as_size, thread):
+    @Slot()
+    def action_show_page(self, num: int):
+        w = MyButton("1", self.action_show_images_local, param=[0])
+        self.image_flow.addWidget(w)
+        for i in range(num):
+            w = MyButton(str(i + 2), self.action_show_images_local, param=[i + 1])
+            self.image_flow.addWidget(w)
+
+    def async_load_images_local(self, folder, as_size, page, thread: QThread):
         files = list_jpg(folder)
+        files.sort(reverse=True)
+
+        p = int(len(files) / 500)
+        self.page_display.emit(p)
+
+        files = files[page * 500:(page + 1) * 500]
+
         self.progress_reset_signal.emit(len(files))
 
         progress = 0
@@ -311,13 +330,13 @@ class MainWidget(QtWidgets.QWidget):
             self.image_signal.emit(file, as_size, img)
             if QThread.isInterruptionRequested(thread):
                 break
-            time.sleep(self.update_delay)
         return True
 
     @Slot()
     def action_show_large_img(self, path, thumb, auto_confirm):
-        dialog = MyImageDialog(self, path, screen.availableGeometry().size(), thumb, auto_confirm)
+        dialog = MyImageDialog(self, path, screen.availableGeometry().size(), thumb, auto_confirm, self.show_info)
         dialog.exec()
+        dialog.deleteLater()
 
     @Slot()
     def action_open_url(self):
@@ -327,19 +346,24 @@ class MainWidget(QtWidgets.QWidget):
             webbrowser.open(url)
 
     def show_info(self):
+        image_path = None
+        url = ""
+        last = ""
         if self.selected_path is not None:
             # image = imutils.url_to_image("https://pbs.twimg.com/media/E_24DrNVUAIPlFe.jpg:small")
 
-            image_path = os.path.join(self.selected_path, "folder.jpg")
-            self.image_frame.set_path(image_path)
-
-            self.selected_data = load_info(self.selected_path)
+            image_path = join_path(self.selected_path, "folder.jpg")
+            # img = MyImageSource(image_path, self.image_frame.size)
+            self.selected_data = InfoImage.load_info(self.selected_path)
             if self.selected_data is not None:
-                self.txt_url.setText(self.selected_data['url'])
-                self.txt_date.setText(self.selected_data['lastUpdate'])
-        else:
-            self.txt_url.setText("")
-            self.txt_date.setText("")
+                url = self.selected_data['url']
+                last = self.selected_data['lastUpdate']
+        self.show_info_imp(image_path, url, last)
+
+    def show_info_imp(self, image_path, url, last):
+        self.image_frame.set_path_async(image_path)
+        self.txt_url.setText(url)
+        self.txt_date.setText(last)
 
     @Slot()
     def action_download_new_img(self):
@@ -351,8 +375,8 @@ class MainWidget(QtWidgets.QWidget):
                                   str_to_date(self.txt_date.text()),
                                   self.selected_path,
                                   self.thumb_size,
-                                  txt_out=self.info_out,
-                                  image_out=self.new_image_signal)
+                                  image_out=self.new_image_signal,
+                                  retry=self.download_retry)
             update_thread.on_finish(on_finish=self.action_download_new_img_done,
                                     on_result=self.action_download_new_img_result,
                                     on_before=self.action_download_new_img_start)
@@ -368,12 +392,12 @@ class MainWidget(QtWidgets.QWidget):
         print(latest_date)
         if path == self.selected_path:
             self.selected_data['lastUpdate'] = latest_date
-            save_info(self.selected_path, self.selected_data)
+            InfoImage.save_info(self.selected_path, self.selected_data)
             self.show_info()
         else:
-            data = load_info(path)
+            data = InfoImage.load_info(path)
             data['lastUpdate'] = latest_date
-            save_info(path, data)
+            InfoImage.save_info(path, data)
 
     def action_download_new_img_done(self):
         self.but_update.setEnabled(True)
@@ -402,8 +426,8 @@ if __name__ == '__main__':
         settings.setValue("bitgirl/url2", "https://cosppi.net/user/")
     if not settings.contains("bitgirl/root"):
         settings.setValue("bitgirl/root", "X:/Image/Twitter")
-    if not settings.contains("bitgirl/update_delay"):
-        settings.setValue("bitgirl/update_delay", 0.005)
+    if not settings.contains("bitgirl/download_retry"):
+        settings.setValue("bitgirl/download_retry", 10)
 
     print("Create App")
 

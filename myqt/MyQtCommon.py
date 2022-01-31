@@ -1,4 +1,6 @@
-from PySide6.QtWidgets import QHBoxLayout, QWidget, QLayout, QBoxLayout, QLayoutItem, QVBoxLayout, QPushButton, QFrame
+import pyperclip
+from PySide6.QtWidgets import QHBoxLayout, QWidget, QLayout, QBoxLayout, QLayoutItem, QVBoxLayout, QPushButton, QFrame, \
+    QLineEdit
 
 
 def clear_all(layout) -> None:
@@ -49,11 +51,39 @@ class MyVBox(QVBoxLayout, MyQtLayout):
         super().__init__(*args, **kwargs)
 
 
+class MyPasteEdit(MyHBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.txt = QLineEdit("")
+        self.but_paste = MyButton('📋', self.paste)
+        self.addAll(self.txt, self.but_paste)
+
+    def text(self) -> str:
+        return self.txt.text()
+
+    def setText(self, text: str):
+        self.txt.setText(text)
+
+    def setReadOnly(self, read: bool):
+        self.txt.setReadOnly(read)
+
+    def paste(self):
+        self.txt.setText(pyperclip.paste())
+
+
 class MyButton(QPushButton):
-    def __init__(self, text, on_click=None, *args, **kwargs):
-        super().__init__(text, *args, **kwargs)
+    def __init__(self, text, on_click=None, param=None, large_text: bool = False, *args, **kwargs):
+        super().__init__(text=text, *args, **kwargs)
+        if param is None:
+            param = []
+        if large_text:
+            self.setStyleSheet("font-size: 22px;" "padding: 4px;")
+
         if on_click:
-            self.clicked.connect(on_click)
+            if param is not None:
+                self.clicked.connect(lambda: on_click(*param))
+            else:
+                self.clicked.connect(on_click())
 
 
 class HorizontalLine(QFrame):

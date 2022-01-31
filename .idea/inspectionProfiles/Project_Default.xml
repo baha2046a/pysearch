@@ -15,6 +15,8 @@
         <list>
           <option value="dict.__setitem__" />
           <option value="myparser.InfoMovie.InfoMovie.__setitem__" />
+          <option value="PySide6.QtCore.started.connect" />
+          <option value="PySide6.QtCore.finished.connect" />
         </list>
       </option>
     </inspection_tool>

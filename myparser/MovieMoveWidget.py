@@ -1,9 +1,9 @@
 import os
-import shutil
 
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import QWidget, QLineEdit
 
+from MyCommon import join_path
 from myparser.InfoMovie import InfoMovie, InfoMaker
 from myqt.MyQtCommon import MyVBox, MyButton, MyHBox
 from myqt.MyQtSetting import EditDictDialog
@@ -18,7 +18,7 @@ class MovieMoveWidget(QWidget):
         super().__init__(*args, **kwargs)
         self.movie = movie
         self.movie_base = movie_base
-        self.maker_path = os.path.join(movie_base, f"({InfoMaker.dir(movie.maker)})").replace("\\", "/")
+        self.maker_path = join_path(movie_base, f"({InfoMaker.dir(movie.maker)})")
         self.m_m = QLineEdit(self.maker_path)
         self.m_t = QLineEdit()
         self.txt_progress = QLineEdit()
@@ -46,8 +46,7 @@ class MovieMoveWidget(QWidget):
         dial = EditDictDialog(InfoMaker.mod_dir, self.movie.maker)
         if dial.exec():
             InfoMaker.mod_dir = dial.get_result()
-            self.maker_path = os.path.join(self.movie_base, f"({InfoMaker.dir(self.movie.maker)})") \
-                .replace("\\", "/")
+            self.maker_path = join_path(self.movie_base, f"({InfoMaker.dir(self.movie.maker)})")
             self.m_m.setText(self.maker_path)
             if os.path.exists(self.maker_path):
                 self.but_mapping.setEnabled(False)
@@ -55,7 +54,7 @@ class MovieMoveWidget(QWidget):
                 self.step_two()
 
     def step_two(self):
-        new_path = os.path.join(self.maker_path, os.path.basename(self.movie.path)).replace("\\", "/")
+        new_path = join_path(self.maker_path, os.path.basename(self.movie.path))
         self.m_t.setText(new_path)
         if new_path == self.movie.path:
             self.m_t.setText("Already Located in Prefer Path")
@@ -87,3 +86,4 @@ class MovieMoveWidget(QWidget):
 
     def finish(self):
         self.on_move.emit(self.m_t.text())
+

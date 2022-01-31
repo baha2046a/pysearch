@@ -23,111 +23,108 @@ Paying attention to comments, there are 4 main options that can be immediately c
 
 import os
 import shutil
-import sys
 import threading
 import time
 
 from PySide6.QtCore import Signal
 
-progressCOLOR = '\033[38;5;33;48;5;236m' #BLUEgreyBG
-finalCOLOR =  '\033[48;5;33m' #BLUEBG
+from TextOut import TextOut
+
+progressCOLOR = '\033[38;5;33;48;5;236m'  # BLUEgreyBG
+finalCOLOR = '\033[48;5;33m'  # BLUEBG
 # check the color codes below and paste above
 
-###### COLORS #######
-# WHITEblueBG = '\033[38;5;15;48;5;33m'
-# BLUE = '\033[38;5;33m'
-# BLUEBG  = '\033[48;5;33m'
-# ORANGEBG = '\033[48;5;208m'
-# BLUEgreyBG = '\033[38;5;33;48;5;236m'
-# ORANGEgreyBG = '\033[38;5;208;48;5;236m' # = '\033[38;5;FOREGROUND;48;5;BACKGROUNDm' # ver 'https://i.stack.imgur.com/KTSQa.png' para 256 color codes
-# INVERT = '\033[7m'
-###### COLORS #######
+# ##### COLORS ####### WHITEblueBG = '\033[38;5;15;48;5;33m' BLUE = '\033[38;5;33m' BLUEBG  = '\033[48;5;33m'
+# ORANGEBG = '\033[48;5;208m' BLUEgreyBG = '\033[38;5;33;48;5;236m' ORANGEgreyBG = '\033[38;5;208;48;5;236m' # =
+# '\033[38;5;FOREGROUND;48;5;BACKGROUNDm' # ver 'https://i.stack.imgur.com/KTSQa.png' para 256 color codes INVERT =
+# '\033[7m' ##### COLORS #######
 
-BOLD    = '\033[1m'
+BOLD = '\033[1m'
 UNDERLINE = '\033[4m'
-CEND    = '\033[0m'
+CEND = '\033[0m'
 
 FilesLeft = 0
 
+
 def FullFolderSize(path):
-    TotalSize = 0
-    if os.path.exists(path):# to be safely used # if FALSE returns 0
+    total_size = 0
+    if os.path.exists(path):  # to be safely used # if FALSE returns 0
         for root, dirs, files in os.walk(path):
             for file in files:
-                TotalSize += os.path.getsize(os.path.join(root, file))
-    return TotalSize
+                total_size += os.path.getsize(os.path.join(root, file))
+    return total_size
 
-def getPERCECENTprogress(source_path, destination_path, bytes_to_copy, txt_out: Signal):
-    dstINIsize = FullFolderSize(destination_path)
+
+def output_progress(source_path, destination_path, bytes_to_copy, txt_out: Signal = None):
+    dst_in_size = FullFolderSize(destination_path)
     time.sleep(.25)
+
     print(" ")
     print((BOLD + UNDERLINE + "FROM:" + CEND + "   "), source_path)
     print((BOLD + UNDERLINE + "TO:" + CEND + "     "), destination_path)
     print(" ")
-    if os.path.exists(destination_path):
-        while bytes_to_copy != (FullFolderSize(destination_path)-dstINIsize):
-            #sys.stdout.write('\r')
-            percentagem = int((float((FullFolderSize(destination_path)-dstINIsize))/float(bytes_to_copy)) * 100)
-            steps = int(percentagem/5)
-            copiado = '{:,}'.format(int((FullFolderSize(destination_path)-dstINIsize)/1000000))# Should be 1024000 but this get's closer to the file manager report
-            sizzz = '{:,}'.format(int(bytes_to_copy/1000000))
-            txt_out.emit(("         {:s} / {:s} Mb  ".format(copiado, sizzz)) +  (BOLD + progressCOLOR + "{:20s}".format('|'*steps) + CEND) + ("  {:d}% ".format(percentagem)) + ("  {:d} ToGo ".format(FilesLeft))) #  STYLE 1 progress default #
-            #BOLD# sys.stdout.write(BOLD + ("        {:s} / {:s} Mb  ".format(copiado, sizzz)) +  (progressCOLOR + "{:20s}".format('|'*steps) + CEND) + BOLD + ("  {:d}% ".format(percentagem)) + ("  {:d} ToGo ".format(FilesLeft))+ CEND) # STYLE 2 progress BOLD # 
-            #classic B/W# sys.stdout.write(BOLD + ("        {:s} / {:s} Mb  ".format(copiado, sizzz)) +  ("|{:20s}|".format('|'*steps)) + ("  {:d}% ".format(percentagem)) + ("  {:d} ToGo ".format(FilesLeft))+ CEND) # STYLE 3 progress classic B/W #
-            #sys.stdout.flush()
-            time.sleep(.01)
-        #sys.stdout.write('\r')
-        #time.sleep(.05)
-        #txt_out.emit(("         {:s} / {:s} Mb  ".format('{:,}'.format(int((FullFolderSize(destination_path)-dstINIsize)/1000000)), '{:,}'.format(int(bytes_to_copy/1000000)))) +  (BOLD + finalCOLOR + "{:20s}".format(' '*20) + CEND) + ("  {:d}% ".format( 100)) + ("  {:s}      ".format('    ')) + "\n") #  STYLE 1 progress default #
-        #BOLD# sys.stdout.write(BOLD + ("        {:s} / {:s} Mb  ".format('{:,}'.format(int((FullFolderSize(destination_path)-dstINIsize)/1000000)), '{:,}'.format(int(bytes_to_copy/1000000)))) +  (finalCOLOR + "{:20s}".format(' '*20) + CEND) + BOLD + ("  {:d}% ".format( 100)) + ("  {:s}      ".format('    ')) + "\n" + CEND ) # STYLE 2 progress BOLD # 
-        #classic B/W# sys.stdout.write(BOLD + ("        {:s} / {:s} Mb  ".format('{:,}'.format(int((FullFolderSize(destination_path)-dstINIsize)/1000000)), '{:,}'.format(int(bytes_to_copy/1000000)))) +  ("|{:20s}|".format('|'*20)) + ("  {:d}% ".format( 100)) + ("  {:s}      ".format('    ')) + "\n" + CEND ) # STYLE 3 progress classic B/W # 
-        #sys.stdout.flush()
+
+    # if os.path.exists(destination_path):
+    total_size = int(bytes_to_copy / 1000000)
+    TextOut.out_progress_max(total_size)
+    total_lab = '{:,}'.format(total_size)
+
+    while bytes_to_copy != (FullFolderSize(destination_path) - dst_in_size):
+        current_size = int((FullFolderSize(destination_path) - dst_in_size) / 1000000)
+        TextOut.out_progress(current_size)
+
+        if txt_out is not None:
+            percent_lab = int(
+                (float((FullFolderSize(destination_path) - dst_in_size)) / float(bytes_to_copy)) * 100)
+            steps = int(percent_lab / 5)
+            current_lab = '{:,}'.format(current_size)
+            txt_out.emit(("{:s} / {:s} Mb  ".format(current_lab, total_lab)) + (
+                "{:20s}".format('|' * steps)) + (
+                             "  {:d}% ".format(percent_lab)) + (
+                             "  {:d} Remain ".format(FilesLeft)))
+        time.sleep(.01)
+
+    TextOut.out_progress(total_size)
 
 
-def CopyProgress(SOURCE, DESTINATION, txt_out: Signal):
+def CopyProgress(source_path, dst, txt_out: Signal = None, allow_same_name=False):
     global FilesLeft
-    DST = os.path.join(DESTINATION, os.path.basename(SOURCE))
-    # <- the previous will copy the Source folder inside of the Destination folder. Result Target: path/to/Destination/SOURCE_NAME
-    # -> UNCOMMENT the next (# DST = DESTINATION) to copy the CONTENT of Source to the Destination. Result Target: path/to/Destination
-    DST = DESTINATION # UNCOMMENT this to specify the Destination as the target itself and not the root folder of the target 
-    #
-    if DST.startswith(SOURCE):
+
+    if dst.startswith(source_path):
         print(" ")
         print(BOLD + UNDERLINE + 'Source folder can\'t be changed.' + CEND)
         print('Please check your target path...')
         print(" ")
-        print(BOLD + '        CANCELED' + CEND)
-        print(" ")
-        exit()
-    #count bytes to copy
-    Bytes2copy = 0
-    for root, dirs, files in os.walk(SOURCE): # USE for filename in os.listdir(SOURCE): # if you don't want RECURSION #
-        dstDIR = root.replace(SOURCE, DST, 1) # USE dstDIR = DST # if you don't want RECURSION #
-        for filename in files:                # USE if not os.path.isdir(os.path.join(SOURCE, filename)): # if you don't want RECURSION #
-            dstFILE = os.path.join(dstDIR, filename)
-            if os.path.exists(dstFILE): continue # must match the main loop (after "threading.Thread")
-            #                                      To overwrite delete dstFILE first here so the progress works properly: ex. change continue to os.unlink(dstFILE)
-            #                                      To rename new files adding date and time, instead of deleating and overwriting,
-            #                                      comment 'if os.path.exists(dstFILE): continue'
-            Bytes2copy += os.path.getsize(os.path.join(root, filename)) # USE os.path.getsize(os.path.join(SOURCE, filename)) # if you don't want RECURSION #
+        return
+
+    # count bytes to copy
+    bytes2copy = 0
+    for root, dirs, files in os.walk(source_path):
+        # USE for filename in os.listdir(SOURCE): # if you don't want RECURSION #
+        dst_dir = root.replace(source_path, dst, 1)  # USE dstDIR = DST # if you don't want RECURSION #
+        for filename in files:  # USE if not os.path.isdir(os.path.join(SOURCE, filename)): # if you don't want
+            # RECURSION #
+            dst_file = os.path.join(dst_dir, filename)
+            if os.path.exists(dst_file) and not allow_same_name:
+                continue
+            bytes2copy += os.path.getsize(os.path.join(root, filename))
+            # USE os.path.getsize(os.path.join(SOURCE, filename)) # if you don't want RECURSION #
             FilesLeft += 1
-    # <- count bytes to copy
-    #
-    # Treading to call the preogress
-    threading.Thread(name='progresso', target=getPERCECENTprogress, args=(SOURCE, DST, Bytes2copy, txt_out)).start()
+
+    # Treading to call the progress
+    threading.Thread(name='progress', target=output_progress, args=(source_path, dst, bytes2copy, txt_out)).start()
     # main loop
-    for root, dirs, files in os.walk(SOURCE): # USE for filename in os.listdir(SOURCE): # if you don't want RECURSION #
-        dstDIR = root.replace(SOURCE, DST, 1) # USE dstDIR = DST # if you don't want RECURSION #
-        if not os.path.exists(dstDIR):
-            os.makedirs(dstDIR)
-        for filename in files:                # USE if not os.path.isdir(os.path.join(SOURCE, filename)): # if you don't want RECURSION #
-            srcFILE = os.path.join(root, filename) # USE os.path.join(SOURCE, filename) # if you don't want RECURSION #
-            dstFILE = os.path.join(dstDIR, filename)
-            if os.path.exists(dstFILE): continue # MUST MATCH THE PREVIOUS count bytes loop 
-            #   <- <-                              this jumps to the next file without copying this file, if destination file exists. 
-            #                                      Comment to copy with rename or overwrite dstFILE
-            #
-            # RENAME part below
+    for root, dirs, files in os.walk(source_path):
+        dst_dir = root.replace(source_path, dst, 1)
+        if not os.path.exists(dst_dir):
+            os.makedirs(dst_dir)
+        for filename in files:  # USE if not os.path.isdir(os.path.join(SOURCE, filename)): # if you don't want
+            # RECURSION #
+            src_file = os.path.join(root, filename)  # USE os.path.join(SOURCE, filename) # if you don't want
+            # RECURSION #
+            dst_file = os.path.join(dst_dir, filename)
+            if os.path.exists(dst_file) and not allow_same_name:
+                continue
             head, tail = os.path.splitext(filename)
             count = -1
             year = int(time.strftime("%Y"))
@@ -135,16 +132,21 @@ def CopyProgress(SOURCE, DESTINATION, txt_out: Signal):
             day = int(time.strftime("%d"))
             hour = int(time.strftime("%H"))
             minute = int(time.strftime("%M"))
-            while os.path.exists(dstFILE):
+            while os.path.exists(dst_file):
                 count += 1
                 if count == 0:
-                    dstFILE = os.path.join(dstDIR, '{:s}[{:d}.{:d}.{:d}]{:d}-{:d}{:s}'.format(head, year, month, day, hour, minute, tail))
+                    dst_file = os.path.join(dst_dir,
+                                            '{:s}[{:d}.{:d}.{:d}]{:d}-{:d}{:s}'.format(head, year, month, day, hour,
+                                                                                       minute, tail))
                 else:
-                    dstFILE = os.path.join(dstDIR, '{:s}[{:d}.{:d}.{:d}]{:d}-{:d}[{:d}]{:s}'.format(head, year, month, day, hour, minute, count, tail))
+                    dst_file = os.path.join(dst_dir,
+                                            '{:s}[{:d}.{:d}.{:d}]{:d}-{:d}[{:d}]{:s}'.format(head, year, month, day,
+                                                                                             hour, minute, count, tail))
             # END of RENAME part
-            shutil.copy2(srcFILE, dstFILE)
+            shutil.copy2(src_file, dst_file)
             FilesLeft -= 1
             #
+
 
 '''
 Ex.

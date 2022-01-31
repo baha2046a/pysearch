@@ -1,21 +1,23 @@
-import json
 import os
+from datetime import date
 from multiprocessing import Pool
-from typing import Any
+from typing import AnyStr, Tuple, Any
+
+import dill as pickle
 
 import imagehash
 from PIL import Image
-from PySide6.QtCore import QThread, QSize
+from PySide6.QtCore import QThread, QSize, Signal
+from bs4 import Tag
 
-from MyCommon import list_jpg, str_to_date, chunks, download
-from myparser.InfoImage import InfoImage
+from MyCommon import list_jpg, str_to_date, chunks, download_with_retry, join_path
+from TextOut import TextOut
 from myparser.ParserCommon import get_soup, get_html, get_soup_from_text
 from myqt.MyQtImage import MyImageSource
 
 
 def search_dup(folder,
                as_size,
-               signal_info,
                signal_old, signal_new,
                progress_reset_signal, progress_signal,
                thread: QThread,
@@ -42,7 +44,7 @@ def search_dup(folder,
                         i = MyImageSource(hashes[temp_hash], as_size)
                         signal_old.emit(hashes[temp_hash], as_size, i)
                     if auto_del:
-                        signal_info.emit(f"Delete Image: {path}")
+                        TextOut.out(f"Delete Image: {path}")
                         os.remove(path)
                     else:
                         n = MyImageSource(path, as_size)
@@ -59,32 +61,7 @@ def check(soup):
     return True
 
 
-def load_info(path):
-    info_path = os.path.join(path, InfoImage.FILE)
-    try:
-        with open(info_path, encoding="utf-8") as f:
-            data = json.load(f)
-            info = InfoImage(**data)
-            print(info)
-            return data
-    except Exception as e:
-        print(e)
-        return None
-
-
-def save_info(path, data):
-    if data is not None:
-        info_path = os.path.join(path, InfoImage.FILE)
-        try:
-            with open(info_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(e)
-        finally:
-            f.close()
-
-
-def covert_date_url_to_url_file(info):
+def covert_date_url_to_url_file(info: Tuple[date, str]) -> Tuple[str, str]:
     img_name = info[1].split("/")[-1]
     modify_img_name = f"{info[0]} {img_name}"
     return info[1], modify_img_name
@@ -109,7 +86,8 @@ def get_page_data(soup, after):
 
     return image_list
 
-    """
+
+"""
     with open('readme.txt') as f:
         lines = f.readlines()
     image = imread(path)
@@ -123,41 +101,54 @@ def get_page_data(soup, after):
         self.image_frame.setPixmap(QtGui.QPixmap.fromImage(image))
     else:
         print(f"Not found: {path}")
-    """
+"""
 
 
-def parse_url_get_images(url,
-                         date_after,
-                         folder,
+def parse_url_get_images(url: AnyStr,
+                         date_after: str,
+                         folder: AnyStr,
                          thumb_size: QSize,
-                         txt_out,
-                         image_out,
+                         image_out: Signal,
+                         retry: int,
                          thread: QThread):
     print("BitGirl >> update")
 
     soup = get_soup(url)
-    txt_out.emit(f"Try to Update: {folder}")
+    TextOut.out(f"Try to Update: {folder}")
 
     image_list = get_page_data(soup, date_after)
-    max_page_div = soup.find_all("div", class_="pageLinkNum_border pageLinkNum_border_last")
+    # max_page_div = soup.find_all("div", class_="pageLinkNum_border pageLinkNum_border_last")
+    max_page_a = soup.find_all("a", class_="last_link")
+    if max_page_a:
+        max_page_a = max_page_a[0]
+
+    for t in soup.find_all("span", class_="dots"):
+        for item in t.next_siblings:
+            if isinstance(item, Tag):
+                if 'class' in item.attrs and 'next' in item.attrs['class']:
+                    break
+                max_page_a = item
+
+    #    max_page_b = max_page_b[0].next_siblings
+    print(max_page_a)
 
     with Pool() as pool:
-        if max_page_div:
-            max_page_a = max_page_div[0].find("a")
-            if max_page_a is not None:
-                max_page = int(max_page_a.attrs['href'].rpartition("/")[-1])
+        # if max_page_div:
+        #    max_page_a = max_page_div[0].find("a")
+        if max_page_a:
+            max_page = int(max_page_a.attrs['href'].rpartition("/")[-1])
 
-                txt_out.emit(f"Page To Load: {max_page}")
+            TextOut.out(f"Page To Load: {max_page}")
 
-                url_list = []
+            url_list = []
 
-                for i in range(2, max_page + 1):
-                    url_list.append(f"{url}/page/{i}")
+            for i in range(2, max_page + 1):
+                url_list.append(f"{url}/page/{i}")
 
-                html_str_list = pool.map(get_html, url_list)
+            html_str_list = pool.map(get_html, url_list)
 
-                for t in html_str_list:
-                    image_list.extend(get_page_data(get_soup_from_text(t), date_after))
+            for t in html_str_list:
+                image_list.extend(get_page_data(get_soup_from_text(t), date_after))
         else:
             next_page_div = soup.select_one("div[class=ranking_page_link_zengo_wrapper_inner]")
             if next_page_div:
@@ -179,24 +170,24 @@ def parse_url_get_images(url,
             image_list = sorted(image_list, key=lambda x: x[0])
             url_list = list(map(covert_date_url_to_url_file, image_list))
 
-            txt_out.emit(f"Image To Download: {len(url_list)}")
+            TextOut.out(f"Image To Download: {len(url_list)}")
 
             # print(threading.get_ident())
 
-            jobs = chunks(list(map(lambda x: (x[0], None, os.path.join(folder, x[1])), url_list)), 30)
+            jobs = chunks(list(map(lambda x: (x[0], None, join_path(folder, x[1]), retry), url_list)), 30)
 
             for job in jobs:
-                download_result = pool.starmap(download, job)
+                download_result = pool.starmap(download_with_retry, job)
 
                 for d in download_result:
-                    if d:
-                        url, img_path = d
-                        txt_out.emit(f"Saved Image From {url} To {img_path}")
+                    url, img_path = d
+                    if url:
+                        TextOut.out(f"Saved Image From {url} To {img_path}")
                         img = MyImageSource(img_path, thumb_size)
                         image_out.emit(img_path, thumb_size, img)
                         # time.sleep(self.update_delay)
                     else:
-                        txt_out.emit(f"Error Download Image From {d[0]}")
+                        TextOut.out(f"Error Download Image {img_path}")
 
                 if thread.isInterruptionRequested():
                     break
@@ -204,10 +195,10 @@ def parse_url_get_images(url,
             if thread.isInterruptionRequested():
                 return None
 
-            txt_out.emit("Update Completed")
+            TextOut.out("Update Completed")
             return folder, latest_date
         else:
-            txt_out.emit("No Update Found")
+            TextOut.out("No Update Found")
     return None
 
     # print(url_list)
