@@ -7,7 +7,7 @@ text_queue = Queue()
 
 class TextOut(object):
     func: Callable[[str], None] = print
-    progress_max: Callable[[int], None] = None
+    progress_max: Callable[[int], None] = print
     progress: Callable[[int], None] = print
 
     @classmethod
@@ -23,6 +23,15 @@ class TextOut(object):
     @staticmethod
     def out(message: str) -> None:
         TextOut.func(message)
+
+    @staticmethod
+    def progress_start() -> None:
+        TextOut.out_progress_max(0)
+
+    @staticmethod
+    def progress_end() -> None:
+        TextOut.out_progress_max(1)
+        TextOut.out_progress(1)
 
     @staticmethod
     def out_progress_max(max_val: int) -> None:

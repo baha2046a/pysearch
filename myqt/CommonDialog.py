@@ -6,10 +6,10 @@ from typing import Tuple, AnyStr
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QDialog, QLineEdit
 
-from MyCommon import list_jpg, valid_folder_name, join_path
+from MyCommon import list_jpg, valid_folder_name, join_path, list_dir
 from TextOut import TextOut
-from myparser.MovieWidget import RenameHint
-from myqt.MyQtCommon import MyVBox, MyButton, MyHBox, MyPasteEdit
+from myparser.RenameHint import RenameHint
+from myqt.MyQtCommon import QtVBox, MyButton, QtHBox, QtPasteEdit, fa_icon, QtDialog
 from myqt.MyQtWorker import MyThread
 from zhtools.langconv import Converter
 
@@ -22,8 +22,8 @@ class RenameImageDialog(QDialog):
         self.b_reorder = MyButton("Reorder", self.async_reorder)
         self.t_to = QLineEdit("1")
         self.b_rename = MyButton("Rename", self.async_rename)
-        self.b_cancel = MyButton("Close", self.reject)
-        self.v_box = MyVBox().addAll(self.b_reorder, self.t_to, self.b_rename, self.b_cancel)
+        self.b_cancel = MyButton(fa_icon("ei.remove-sign"), self.reject)
+        self.v_box = QtVBox().addAll(self.b_reorder, self.t_to, self.b_rename, self.b_cancel)
         layout = self.v_box
         self.setLayout(layout)
         self.setWindowTitle("Rename")
@@ -65,18 +65,36 @@ class RenameImageDialog(QDialog):
                 break
 
 
-class DeleteConfirmDialog(QDialog):
+class DeleteConfirmDialog(QtDialog):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.b_ok = MyButton("Ok", self.accept)
-        self.b_cancel = MyButton("Cancel", self.reject)
-        self.v_box = MyVBox().addAll(self.b_ok, self.b_cancel)
-        layout = self.v_box
-        self.setLayout(layout)
+        self.setLayout(self._bar_ok_cancel())
         self.setWindowTitle("Confirm")
 
 
-class RenameDialog(QDialog):
+class ConfirmDialog(QtDialog):
+    def __init__(self, body, title: str = "Confirm", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        vbox = QtVBox()
+        vbox.addAll(body, self._bar_ok_cancel())
+        self.setLayout(vbox)
+        self.setWindowTitle(title)
+
+
+class InputDialog(QtDialog):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.txt_input = QLineEdit()
+        layout = QtVBox().addAll(self.txt_input,
+                                 self._bar_ok_cancel())
+        self.setLayout(layout)
+        self.setWindowTitle("Input")
+
+    def get_result(self) -> str:
+        return self.txt_input.text()
+
+
+class RenameDialog(QtDialog):
     def __init__(self, path_current: str, path_target: str = "",
                  hint_box: RenameHint = None, lang_convert_list=None,
                  *args, **kwargs):
@@ -85,7 +103,7 @@ class RenameDialog(QDialog):
         self.t_dir = QLineEdit()
         self.t_dir.setReadOnly(True)
         self.t_o = QLineEdit()
-        self.t_n = MyPasteEdit()
+        self.t_n = QtPasteEdit()
         self.t_o.setReadOnly(True)
         self.lang_convert_list = lang_convert_list or []
         self.old_path = path_current
@@ -95,20 +113,25 @@ class RenameDialog(QDialog):
         if hint_box is not None:
             hint_box.hint_out.connect(self.hint)
         else:
-            hint_box = MyVBox()
+            hint_box = QtVBox()
 
-        self.b_ok = MyButton("Apply", self.accept)
-        self.b_cancel = MyButton("Cancel", self.reject)
+        b_re_tag_l = MyButton("LX", self.remove_tag, [0])
+        b_re_tag_r = MyButton("RX", self.remove_tag, [1])
+        b_re_tag_l.setFixedWidth(60)
+        b_re_tag_r.setFixedWidth(60)
+
         b_zh = MyButton("JP>ZH", self.jp_zh)
         b_jp = MyButton("ZH>JP", self.zh_jp)
         b_han = MyButton("SIM>ZH", self.sim_han)
-        self.v_box = MyVBox().addAll(hint_box, self.t_dir, self.t_o, self.t_n,
-                                     MyHBox().addAll(b_zh, b_jp, b_han),
-                                     MyHBox().addAll(self.b_ok, self.b_cancel))
+        b_hint = MyButton("+Hint", self.add_hint)
+        self.v_box = QtVBox().addAll(hint_box,  QtHBox().addAll(self.t_dir, self.t_o),
+                                     QtHBox().addAll(self.t_n, b_re_tag_l, b_re_tag_r),
+                                     QtHBox().addAll(b_zh, b_jp, b_han, b_hint),
+                                     self._bar_ok_cancel())
         layout = self.v_box
         self.setLayout(layout)
         self.setWindowTitle("Rename")
-        self.resize(600, 200)
+        self.resize(800, 700)
 
     def create_mode(self):
         self.t_dir.setText(self.old_path)
@@ -136,11 +159,42 @@ class RenameDialog(QDialog):
         if old_path == "" or old_path is None:
             os.makedirs(out_path, exist_ok=True)
         else:
+            filename, file_extension = os.path.splitext(target)
+            count = 0
             while os.path.exists(out_path):
-                out_path = os.path.join(dir_path, target + "_1").replace("\\", "/")
-            shutil.move(old_path, out_path)
+                count = count + 1
+                out_path = join_path(dir_path, f"{filename} ({count}){file_extension}")
+
+            if os.path.isdir(old_path):
+                os.makedirs(out_path, exist_ok=True)
+                content = list_dir(old_path)
+                for item in content:
+                    out = join_path(out_path, os.path.basename(item))
+                    shutil.move(item, out)
+                time.sleep(0.5)
+                os.rmdir(old_path)
+            else:
+                os.rename(old_path, out_path)
         time.sleep(0.1)
         return out_path, target
+
+    @staticmethod
+    def test(a, b):
+        print("s", a)
+        try:
+            os.rename(a, b)
+        except Exception as e:
+            shutil.move(a, b)
+            print(e)
+        print("e", b)
+
+    def remove_tag(self, direction):
+        sp = self.t_n.text().split(" ")
+        if len(sp) > 1:
+            if direction == 0:
+                self.t_n.setText(" ".join(sp[1:]))
+            else:
+                self.t_n.setText(" ".join(sp[:-1]))
 
     def jp_zh(self):
         txt = self.t_n.text()
@@ -160,6 +214,15 @@ class RenameDialog(QDialog):
         txt = self.t_n.text()
         txt = Converter("zh-hant").convert(txt)
         self.t_n.setText(txt)
+
+    def add_hint(self):
+        sp = self.t_n.text().split(" ")
+        print(sp)
+        if len(sp) > 1:
+            body = QLineEdit()
+            body.setText(f"Add {sp[0]}-{sp[1]} ?")
+            if ConfirmDialog(body).exec():
+                RenameHint.add_path(sp[0], sp[1])
 
     def set(self, path_current: str, path_target: str = ""):
         self.old_path = path_current

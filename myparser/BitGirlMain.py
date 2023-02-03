@@ -1,43 +1,59 @@
+import asyncio
+import json
 import os
 from datetime import date
-from multiprocessing import Pool
-from typing import AnyStr, Tuple, Any
-
-import dill as pickle
+from typing import AnyStr, Tuple, Callable
 
 import imagehash
-from PIL import Image
-from PySide6.QtCore import QThread, QSize, Signal
+from PIL import Image  # Pillow
+from PySide6.QtCore import QSize, Signal
 from bs4 import Tag
 
-from MyCommon import list_jpg, str_to_date, chunks, download_with_retry, join_path
+from MyCommon import list_jpg, str_to_date, download_with_retry, join_path
 from TextOut import TextOut
-from myparser.ParserCommon import get_soup, get_html, get_soup_from_text
-from myqt.MyQtImage import MyImageSource
+from myparser.ParserCommon import get_soup, get_soup_from_text, get_html_async
+from myqt.MyQtWorker import MyThreadPool
+from myqt.QtImage import MyImageSource
 
 
 def search_dup(folder,
                as_size,
                signal_old, signal_new,
                progress_reset_signal, progress_signal,
-               thread: QThread,
+               check_cancel: Callable[[], bool] = None,
                auto_del=True):
     files = list_jpg(folder)
     if files:
-        hashes = {}
+        exist_hash = []
+        hashes, old_exist_hash, _ = read_hash_file(folder)
+        for path in old_exist_hash:
+            if path in files:
+                exist_hash.append(path)
+            else:
+                TextOut.out(f"Remove hash: {path}")
+                for k, v in list(hashes.items()):
+                    if v == path:
+                        del hashes[k]
+                        TextOut.out(f"Hash removed: {path}")
+
         parent = []
         progress = 0
         progress_reset_signal.emit(len(files))
-        for _path in files:
-            path = _path.replace("\\", "/")
+        for path in files:
             progress += 1
             progress_signal.emit(progress)
             if path.endswith("folder.jpg"):
                 continue
-            if thread.isInterruptionRequested():
+            if check_cancel and check_cancel():
                 break
+            if path in exist_hash:
+                continue
             with Image.open(path) as img:
-                temp_hash = imagehash.average_hash(img, 8)
+                try:
+                    temp_hash = str(imagehash.average_hash(img, 8))
+                except Exception as ex:
+                    print(ex, path)
+                    continue
                 if temp_hash in hashes:
                     if hashes[temp_hash] not in parent:
                         parent.append(hashes[temp_hash])
@@ -50,8 +66,43 @@ def search_dup(folder,
                         n = MyImageSource(path, as_size)
                         signal_new.emit(path, as_size, n)
                 else:
+                    exist_hash.append(path)
                     hashes[temp_hash] = path
-    return True
+        write_hash_file(folder, hashes, exist_hash)
+    return folder
+
+
+def read_hash_file(folder) -> tuple[dict, list, bool]:
+    hash_file = os.path.join(folder, "hash.json")
+    hash_path = os.path.join(folder, "hash_path.json")
+    hashes = {}
+    exist_hash = []
+    exist = False
+    if os.path.exists(hash_file) and os.path.exists(hash_path):
+        try:
+            with open(hash_file) as f:
+                hashes = json.load(f)
+            with open(hash_path) as f:
+                exist_hash = json.load(f)
+            exist = True
+        except Exception as ex:
+            hashes = {}
+            exist_hash = []
+            print(ex)
+    return hashes, exist_hash, exist
+
+
+def write_hash_file(folder, hashes=None, exist_hash=None):
+    if exist_hash is None:
+        exist_hash = []
+    if hashes is None:
+        hashes = {}
+    hash_file = os.path.join(folder, "hash.json")
+    hash_path = os.path.join(folder, "hash_path.json")
+    with open(hash_path, 'w') as f:
+        json.dump(exist_hash, f, ensure_ascii=False)
+    with open(hash_file, 'w') as f:
+        json.dump(hashes, f, ensure_ascii=False)
 
 
 def check(soup):
@@ -110,10 +161,19 @@ def parse_url_get_images(url: AnyStr,
                          thumb_size: QSize,
                          image_out: Signal,
                          retry: int,
-                         thread: QThread):
+                         check_cancel: Callable[[], bool] = None):
+    return MyThreadPool.asyncio(parse_async, [url, date_after, folder, thumb_size, image_out, retry, check_cancel])
+
+
+async def parse_async(loop, url: AnyStr, date_after: str,
+                      folder: AnyStr,
+                      thumb_size: QSize,
+                      image_out: Signal,
+                      retry: int,
+                      check_cancel: Callable[[], bool] = None):
     print("BitGirl >> update")
 
-    soup = get_soup(url)
+    soup = get_soup(url, timeout=(8.0, 12.0))
     TextOut.out(f"Try to Update: {folder}")
 
     image_list = get_page_data(soup, date_after)
@@ -132,73 +192,88 @@ def parse_url_get_images(url: AnyStr,
     #    max_page_b = max_page_b[0].next_siblings
     print(max_page_a)
 
-    with Pool() as pool:
-        # if max_page_div:
-        #    max_page_a = max_page_div[0].find("a")
-        if max_page_a:
-            max_page = int(max_page_a.attrs['href'].rpartition("/")[-1])
+    # if max_page_div:
+    #    max_page_a = max_page_div[0].find("a")
+    if max_page_a:
+        max_page = int(max_page_a.attrs['href'].rpartition("/")[-1])
 
-            TextOut.out(f"Page To Load: {max_page}")
+        TextOut.out(f"Page To Load: {max_page}")
 
-            url_list = []
+        async def get_page(in_url):
+            h_str = await get_html_async(loop, in_url)
+            if isinstance(h_str, Exception):
+                return False
+            image_list.extend(get_page_data(get_soup_from_text(h_str), date_after))
+            return True
 
-            for i in range(2, max_page + 1):
-                url_list.append(f"{url}/page/{i}")
+        as_jobs = []
+        for i in range(2, max_page + 1):
+            as_jobs.append(get_page(f"{url}/page/{i}"))
+        await asyncio.gather(*as_jobs)
+    else:
+        next_page_div = soup.select_one("div[class=ranking_page_link_zengo_wrapper_inner]")
+        if next_page_div:
+            next_page = next_page_div.select_one("span[class=right] a")
+            if next_page:
+                ex_url = next_page.attrs['href']
+                ex_soup = get_soup(ex_url)
+                image_list.extend(get_page_data(ex_soup, date_after))
+                print(ex_url)
 
-            html_str_list = pool.map(get_html, url_list)
+    if check_cancel and check_cancel():
+        return None
+        # date_check = datetime.date()
+    image_list = list(dict.fromkeys(image_list))
 
-            for t in html_str_list:
-                image_list.extend(get_page_data(get_soup_from_text(t), date_after))
-        else:
-            next_page_div = soup.select_one("div[class=ranking_page_link_zengo_wrapper_inner]")
-            if next_page_div:
-                next_page = next_page_div.select_one("span[class=right] a")
-                if next_page:
-                    ex_url = next_page.attrs['href']
-                    ex_soup = get_soup(ex_url)
-                    image_list.extend(get_page_data(ex_soup, date_after))
-                    print(ex_url)
+    if image_list:
+        latest_date = str(max(list(map(lambda x: x[0], image_list))))
 
-        if thread.isInterruptionRequested():
-            return None
-            # date_check = datetime.date()
-        image_list = list(dict.fromkeys(image_list))
+        image_list = sorted(image_list, key=lambda x: x[0])
+        url_list = list(map(covert_date_url_to_url_file, image_list))
 
-        if image_list:
-            latest_date = str(max(list(map(lambda x: x[0], image_list))))
+        TextOut.out(f"Image To Download: {len(url_list)}")
 
-            image_list = sorted(image_list, key=lambda x: x[0])
-            url_list = list(map(covert_date_url_to_url_file, image_list))
+        hashes, exist_hash, write_hash = read_hash_file(folder)
 
-            TextOut.out(f"Image To Download: {len(url_list)}")
+        # jobs = chunks(list(map(lambda x: (loop, x[0], None, join_path(folder, x[1]), retry), url_list)), 30)
+        jobs = list(map(lambda x: (loop, x[0], None, join_path(folder, x[1]), retry), url_list))
 
-            # print(threading.get_ident())
-
-            jobs = chunks(list(map(lambda x: (x[0], None, join_path(folder, x[1]), retry), url_list)), 30)
-
-            for job in jobs:
-                download_result = pool.starmap(download_with_retry, job)
-
-                for d in download_result:
-                    url, img_path = d
-                    if url:
-                        TextOut.out(f"Saved Image From {url} To {img_path}")
+        async def download_and_show(params: tuple):
+            d_url, img_path = await download_with_retry(*params)
+            if d_url:
+                if not write_hash:
+                    img = MyImageSource(img_path, thumb_size)
+                    image_out.emit(img_path, thumb_size, img)
+                    return True
+                with Image.open(img_path) as img:
+                    try:
+                        temp_hash = str(imagehash.average_hash(img, 8))
+                    except Exception as ex:
+                        print(ex)
+                        return False
+                    if temp_hash in hashes:
+                        print("Dup", img_path)
+                        os.remove(img_path)
+                    else:
+                        exist_hash.append(img_path)
+                        hashes[temp_hash] = img_path
                         img = MyImageSource(img_path, thumb_size)
                         image_out.emit(img_path, thumb_size, img)
-                        # time.sleep(self.update_delay)
-                    else:
-                        TextOut.out(f"Error Download Image {img_path}")
+                        return True
+            return False
 
-                if thread.isInterruptionRequested():
-                    break
+        dl_jobs = []
+        for job in jobs:
+            dl_jobs.append(download_and_show(job))
+        await asyncio.gather(*dl_jobs)
 
-            if thread.isInterruptionRequested():
-                return None
+        if write_hash:
+            write_hash_file(folder, hashes, exist_hash)
 
-            TextOut.out("Update Completed")
-            return folder, latest_date
-        else:
-            TextOut.out("No Update Found")
-    return None
+        TextOut.out("Update Completed")
+        return folder, latest_date
+    else:
+        TextOut.out("No Update Found")
+        return folder, None
 
-    # print(url_list)
+# print(url_list)

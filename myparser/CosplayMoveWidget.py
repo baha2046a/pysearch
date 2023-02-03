@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget, QLineEdit
 
 from FileCopyProgress import CopyProgress
 from MyCommon import list_dir, chunks, join_path
-from myqt.MyQtCommon import MyVBox, MyButton, MyHBox
+from myqt.MyQtCommon import QtVBox, MyButton, QtHBox
 from myqt.MyQtWorker import MyThread
 
 
@@ -15,8 +15,8 @@ class CosplayMoveWidget(QWidget):
     on_move = Signal(str, bool)
     progress = Signal(str)
 
-    def __init__(self, cos_root: str, path: str, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, parent, cos_root: str, path: str, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
 
         folder_list = list_dir(cos_root, "*/")
         # print(path, folder_list)
@@ -28,21 +28,21 @@ class CosplayMoveWidget(QWidget):
         self.move_list = []
         rows = chunks(folder_list, 3)
         for row in rows:
-            row_box = MyHBox()
+            row_box = QtHBox()
             for folder in row:
                 link = folder.replace("\\", "/")
                 name = os.path.basename(os.path.dirname(link))
                 txt = QLineEdit(name)
                 txt.setMinimumWidth(100)
                 but = MyButton("Move", self.action_move, param=[link, False])
-                row_box.add(MyHBox().addAll(txt, but))
+                row_box.add(QtHBox().addAll(txt, but))
             # but2 = MyButton("Move And Show", self.action_move, (u, True))
             self.move_list.append(row_box)
 
         self.txt_progress = QLineEdit()
         self.txt_progress.setReadOnly(True)
 
-        self.layout = MyVBox().addAll(*self.move_list)
+        self.layout = QtVBox().addAll(*self.move_list)
         self.progress.connect(self.show_progress)
 
         self.setLayout(self.layout)

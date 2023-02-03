@@ -1,9 +1,11 @@
 import json
 import shutil
-from typing import AnyStr, Tuple, Any, TypeVar, Optional
+from typing import AnyStr, Tuple, TypeVar, Optional
 
+import aiofiles
 import jsons
 
+from MyCommon import async_save_json
 from TextOut import TextOut
 
 T = TypeVar('T')
@@ -59,3 +61,16 @@ class InfoMovieItem:
             print(e)
         finally:
             f.close()
+
+    @staticmethod
+    async def _async_save(path: AnyStr, data) -> None:
+        tmp_path = path + "_tmp"
+        try:
+            TextOut.out(f"Start Save File: {path}")
+            d = jsons.dump(data)
+            await async_save_json(tmp_path, d)
+            shutil.move(tmp_path, path)
+            TextOut.out(f"Finish Save File: {path}")
+        except Exception as e:
+            print(e)
+

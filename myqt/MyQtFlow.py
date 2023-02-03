@@ -2,12 +2,12 @@
 import sys
 from typing import Optional
 from PySide6 import QtCore, QtWidgets
-from PySide6.QtCore import Qt, QMargins, QPoint, QRect, QSize
+from PySide6.QtCore import Qt, QMargins, QPoint, QRect, QSize, Slot
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import *
 from PySide6.QtWidgets import QWidget
 
-from myqt.MyQtImage import MyImageSource, MyImageBox
+from myqt.QtImage import MyImageSource, MyImageBox
 
 
 class MyQtFlowLayout(QLayout):
@@ -148,14 +148,22 @@ class MyQtScrollableFlow(QScrollArea):
         self.setBackgroundRole(QPalette.Dark)
         self.setWidget(self.flow)
         self.setWidgetResizable(True)
+        self.can_remove = True
+
+    @Slot()
+    def change_can_remove(self, val: bool) -> None:
+        self.can_remove = val
 
     def addWidget(self, item: QWidget, front=False) -> None:
         MyQtFlowLayout.add_to_front = front
         self.flow.addWidget(item)
+        if hasattr(item, 'can_remove'):
+            item.can_remove.connect(self.change_can_remove, Qt.QueuedConnection)
 
     def clearAll(self) -> None:
-        self.date_str = ""
-        self.flow.clearAll()
+        if self.can_remove:
+            self.date_str = ""
+            self.flow.clearAll()
 
     def show_img(self, as_size, img: MyImageSource, on_click):
         if self.group_by_date:
@@ -165,7 +173,7 @@ class MyQtScrollableFlow(QScrollArea):
                 date_label = QPushButton(date_str)
                 date_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
                 self.addWidget(date_label)
-        label = MyImageBox(as_size, img).display(self)
+        label = MyImageBox(self, as_size, img).display(self)
         label.on_click(on_click)
 
 

@@ -1,13 +1,13 @@
 from PySide6.QtCore import Slot
-from PySide6.QtWidgets import QDialog, QLineEdit
+from PySide6.QtWidgets import QLineEdit
 
-from myparser.ParserCommon import get_soup
-from myqt.MyQtCommon import MyButton, MyVBox, MyPasteEdit
 from myparser import check
+from myparser.ParserCommon import get_soup
+from myqt.MyQtCommon import MyButton, QtVBox, QtPasteEdit, QtDialog
 from myqt.MyQtSetting import MySetting
 
 
-class CreateRecordDialog(QDialog):
+class CreateRecordDialog(QtDialog):
     def __init__(self, parent, settings: MySetting, name=None, url=None, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.settings = settings
@@ -15,7 +15,7 @@ class CreateRecordDialog(QDialog):
         self.p1 = None
         self.p2 = None
 
-        self.txt_name = MyPasteEdit()
+        self.txt_name = QtPasteEdit()
         self.txt_url = QLineEdit()
         if name:
             self.txt_name.setText(name)
@@ -27,19 +27,15 @@ class CreateRecordDialog(QDialog):
         self.but_check_b = MyButton("As BitGirl", self.action_check_b)
         self.but_check_c = MyButton("As Cosppi", self.action_check_c)
 
-        self.but_ok = MyButton("Process", self.accept)
-        self.but_cancel = MyButton("Cancel", self.reject)
-
         self.but_check_b.setEnabled(False)
         self.but_check_c.setEnabled(False)
 
-        layout = MyVBox().addAll(self.txt_name,
+        layout = QtVBox().addAll(self.txt_name,
                                  self.but_check,
                                  self.but_check_b,
                                  self.but_check_c,
                                  self.txt_url,
-                                 self.but_ok,
-                                 self.but_cancel)
+                                 self._bar_ok_cancel())
         self.setLayout(layout)
         self.setMinimumWidth(400)
 

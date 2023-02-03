@@ -1,4 +1,4 @@
-def movie_name_fix(title):
+def movie_name_fix(title: str) -> str:
     return title.replace("奴●", "奴隷")\
         .replace("レ●プ", "レイプ")\
         .replace("犯●れ", "犯され")\
@@ -11,5 +11,7 @@ def movie_name_fix(title):
         .replace("虐●", "虐待")\
         .replace("輪●", "輪姦")\
         .replace("折●", "折檻")\
+        .replace("泥●", "泥酔") \
         .replace("ロ●ータ", "ロリータ")\
-        .replace("●す", "犯す")
+        .replace("●す", "犯す")\
+        .replace("チ●ポ", "チンポ")

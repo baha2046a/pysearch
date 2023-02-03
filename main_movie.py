@@ -1,48 +1,53 @@
 #!/usr/bin/env python3
+import asyncio
 import os
 import re
 import shutil
-import subprocess
 import sys
 import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import AnyStr
+from typing import Optional
 
+import qasync
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtCore import *
 from PySide6.QtGui import *
-from PySide6.QtWidgets import *
+from PySide6.QtWidgets import QProgressBar, QLineEdit, QComboBox, QAbstractItemView, QWidget, QLabel, QSplitter
 from qt_material import apply_stylesheet
 
-from MyCommon import list_jpg, str_to_date, list_dir, join_path
+from MyCommon import list_jpg, list_dir, join_path, every
 from TextOut import TextOut
-from myparser import parse_url_get_images
-from myparser.CreateRecordDialog import CreateRecordDialog
-from myparser.FanzaMain import get_fanza_result, file_name_to_movie_id, get_all_fanza
-from myparser.InfoMovie import InfoMovie, load_info, save_info
+from myparser.InfoMovie import InfoMovie, load_info
 from myparser.MovieCache import load_movie_db, save_movie_db, MovieCache
 from myparser.MovieMoveWidget import MovieMoveWidget
 from myparser.MovieSeries import PathSeriesWidget, SearchMovieWidget
 from myparser.MovieWidget import MovieWidget, MovieLiteWidget, ActorWidget, KeywordWidget
-from myqt.CommonDialog import RenameDialog
+from myparser.movie.fanza import file_name_to_movie_id, get_all_fanza
+from myparser.movie.paser import MovieParser
+from myqt.CommonDialog import InputDialog
+from myqt.EditDict import EditDictDialog
+from myqt.MultiList import ActorListDialog
 from myqt.MyDirModel import MyDirModel
-from myqt.MyQtCommon import MyHBox, MyVBox, MyButton
+from myqt.MyQtCommon import QtHBox, QtVBox, MyButton, fa_icon
 from myqt.MyQtFlow import MyQtScrollableFlow
-from myqt.MyQtImage import MyImageBox, MyImageSource, MyImageDialog
 from myqt.MyQtSetting import MySetting, SettingDialog
-from myqt.MyQtWorker import MyThread
+from myqt.MyQtWorker import MyThread, MyThreadPool
+from myqt.QtImage import MyImageBox, MyImageSource, MyImageDialog
+from myqt.QtVideo import MyVideoDialog, QtVideoDialog
 
 
 class MainWidget(QtWidgets.QWidget):
     info_out = Signal(str)
     info_out_n = Signal(str)
-    image_signal = Signal(str, QSize, MyImageSource)
-    new_movie_signal = Signal(InfoMovie)
+    image_signal = Signal(str, QSize, MyImageSource, bool)
+
     progress_reset_signal = Signal(int)
     progress_signal = Signal(int)
-    display_movie = Signal(str, str)
+    update_thread_count_signal = Signal(str)
+
+    search_result_signal = Signal(list)
 
     def __init__(self):
         super().__init__()
@@ -57,67 +62,70 @@ class MainWidget(QtWidgets.QWidget):
         print(fa.icons['thumbs-up'])
         """
 
-        self.but_settings = MyButton('Setting', self.action_settings)
+        self.but_exit = MyButton(fa_icon('mdi.exit-run'), self.safe_exit)
+        self.but_settings = MyButton(fa_icon('ri.settings-3-line'), self.action_settings)
         self.but_move_movie = MyButton('Move', self.action_move_movie)
         self.but_list_series = MyButton('Series', self.action_list_series)
+        self.but_list_actor = MyButton(fa_icon('fa5s.female'), self.action_list_actor)
+        self.but_search_movie = MyButton(fa_icon('fa5s.compress-arrows-alt'), self.action_search_movie)
+        self.but_show_images_local = MyButton(fa_icon('fa5.images'), self.action_show_images_local)
 
-        h_box_top_bar = MyHBox().addAll(self.but_settings,
-                                        self.but_move_movie,
-                                        self.but_list_series)
+        h_box_top_bar = QtHBox().addAll(self.but_exit, self.but_settings,
+                                        self.but_move_movie, self.but_list_series, self.but_list_actor,
+                                        self.but_search_movie, self.but_show_images_local)
 
-        self.progress_bar = QProgressBar()
+        self.progress_bar = QProgressBar(self)
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(1)
         self.progress_bar.setValue(1)
 
-        self.image_frame = MyImageBox(QSize(300, 240))
+        self.txt_thread = QLabel(self)
+        self.txt_thread.setText("0")
+        self.txt_thread.setMaximumWidth(30)
+
+        self.image_frame = MyImageBox(self, QSize(300, 240))
 
         self.txt_move_path = QLineEdit("Folder")
         # self.txt_url.setReadOnly(True)
-        self.but_refresh_path = MyButton("Refresh", self.action_refresh_path)
-        self.but_move_to_download_folder = MyButton("Download", self.action_to_download_folder)
-        self.but_move_to_movie_folder = MyButton("Movie", self.action_to_movie_folder)
 
-        h_box_url = MyHBox().addAll(self.but_move_to_download_folder,
-                                    self.but_move_to_movie_folder,
-                                    self.but_refresh_path)
+        shortcut = {"Download": settings.valueStr("movie/download"),
+                    "Movie": settings.valueStr("movie/base"),
+                    "D": "D:/",
+                    "Ready": "X:/ready"}
 
-        self.txt_date = QLineEdit("Movie")
+        self.filter_mid = QComboBox(self)
+        self.filter_mid.setFixedWidth(100)
+        self.filter_mid.currentIndexChanged.connect(self.filter_change)
         self.but_scan_all = MyButton('Scan All', self.action_get_all_movie)
         self.but_recheck = MyButton("Scan", self.action_custom_search)
         self.but_update = MyButton("Rename", self.action_rename)
         self.but_mp4_to_folder = MyButton('+', self.action_mp4_to_folder)
         self.but_delete_info = MyButton('-', self.action_delete_info)
 
-        h_box_date = MyHBox().addAll(self.txt_date,
+        h_box_date = QtHBox().addAll(self.filter_mid,
                                      self.but_scan_all,
                                      self.but_recheck,
                                      self.but_update,
                                      self.but_delete_info,
                                      self.but_mp4_to_folder)
 
-        self.model = MyDirModel()  # QFileSystemModel(self)  # QStringListModel()
+        self.model = MyDirModel(shortcut=shortcut)  # QFileSystemModel(self)  # QStringListModel()
         # self.model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
         # self.model.setReadOnly(True)
 
         self.model.view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # self.view.setViewMode(QListView.IconMode)
-        self.model.signal_clicked.connect(self.action_list_click)
-        self.model.signal_double_clicked.connect(self.action_list_double_click)
-        self.model.signal_root_changed.connect(self.model_root_changed)
+        self.model.signal_clicked.connect(self.action_list_click, Qt.QueuedConnection)
+        self.model.signal_double_clicked.connect(self.action_list_double_click, Qt.QueuedConnection)
+        self.model.signal_root_changed.connect(self.model_root_changed, Qt.QueuedConnection)
 
-        self.but_exit = MyButton('Exit', self.safe_exit)
-
-        h_box_bottom_bar = MyHBox().addAll(self.but_exit)
-
-        v_box_left = MyVBox().addAll(h_box_top_bar,
-                                     self.progress_bar,
-                                     self.image_frame,
-                                     h_box_url,
+        v_box_left = QtVBox().addAll(h_box_top_bar,
                                      h_box_date,
+                                     QtHBox().addAll(self.progress_bar, self.txt_thread),
+                                     self.image_frame,
+                                     self.model.shortcut_bar,
                                      self.model.tool_bar,
-                                     self.model.view,
-                                     h_box_bottom_bar)
+                                     self.model.view)
 
         self.left_panel_widget = QWidget(self)
         self.left_panel_widget.setLayout(v_box_left)
@@ -127,7 +135,7 @@ class MainWidget(QtWidgets.QWidget):
         for txt in self.txt_info:
             txt.setMaximumWidth(1200)
 
-        self.selected_path: str = ""
+        # self.selected_path: str = ""
         self.movie_base = ""
 
         self.image_flow = MyQtScrollableFlow()
@@ -135,37 +143,41 @@ class MainWidget(QtWidgets.QWidget):
         # h_sep = HorizontalLine()
         # self.vbox_right.addWidget(h_sep)
 
-        self.splitter_right = QSplitter(self)
-        self.splitter_right.setOrientation(Qt.Vertical)
+        self.splitter_right = QSplitter(Qt.Vertical, self)
+        # self.splitter_right.setOrientation(Qt.Vertical)
         self.splitter_right.addWidget(self.image_flow)
         self.splitter_right.addWidget(self.image_new_flow)
 
         if settings.contains("movie/splitterSizes"):
             self.splitter_right.restoreState(settings.value("movie/splitterSizes"))
 
-        self.right_panel = MyVBox().addAll(self.splitter_right, *self.txt_info)
+        self.right_panel = QtVBox().addAll(self.splitter_right, *self.txt_info)
 
-        layout = MyHBox().addAll(self.left_panel_widget, self.right_panel)
+        layout = QtHBox().addAll(self.left_panel_widget, self.right_panel)
 
         self.setLayout(layout)
 
         self.thumb_size = QSize(140, 200)
-        self.selected_data: InfoMovie = None
+        self.selected_data: Optional[InfoMovie] = None
         self.update_delay = 0.001
         self.apply_settings()
 
         self.progress_signal.connect(self.progress_bar.setValue)
         self.progress_reset_signal.connect(self.progress_bar.setMaximum)
-        self.info_out.connect(self.action_info_out)
-        self.info_out_n.connect(self.action_info_out_no_newline)
+        self.update_thread_count_signal.connect(self.txt_thread.setText, Qt.QueuedConnection)
+
+        self.info_out.connect(self.action_info_out, Qt.QueuedConnection)
+        self.info_out_n.connect(self.action_info_out_no_newline, Qt.QueuedConnection)
         self.image_signal.connect(self.action_show_img, Qt.QueuedConnection)
-        self.new_movie_signal.connect(self.action_save_movie, Qt.QueuedConnection)
-        self.display_movie.connect(self.action_load_folder)
+
+        self.search_result_signal.connect(self.movie_result_single, Qt.QueuedConnection)
         # self.model.directoryLoaded.connect(self.model_loaded)
 
         TextOut.out = self.info_out.emit
         TextOut.progress_max = self.progress_reset_signal.emit
         TextOut.progress = self.progress_signal.emit
+
+        threading.Thread(target=lambda: every(1, self.count_thread), daemon=True).start()
 
     def apply_settings(self):
         thumb_w = settings.valueInt("image/thumb/width", 140)
@@ -180,37 +192,75 @@ class MainWidget(QtWidgets.QWidget):
 
         # self.set_dir(settings.value("bitgirl/root"))
         self.movie_base = settings.valueStr("movie/base")
-        load_movie_db(self.movie_base)
+        if not os.path.exists(self.movie_base):
+            self.movie_base = "D:/AV"
 
-        self.selected_path = settings.valueStr("movie/last_selection", None)
+        load_movie_db("D:/AV")  # self.movie_base)
 
-        print(self.selected_path)
+        # self.selected_path = settings.valueStr("movie/last_selection", None)
+
         self.model.setRootPath(settings.value("movie/root"))
-        self.model.makeSelect(self.selected_path)
+        self.model.makeSelect(settings.valueStr("movie/last_selection", None))
 
         # self.root_idx = self.model.setRootPath(settings.value("bitgirl/root"))
         # self.view.setRootIndex(self.root_idx)
 
+    def count_thread(self):
+        self.update_thread_count_signal.emit(str(MyThread.size() + MyThreadPool.size()))
+
     @Slot()
-    def action_list_click(self, path, _1, _2) -> None:
-        if path != self.selected_path:
-            self.selected_path = path
-            print(self.selected_path)
-            settings.setValue("movie/last_selection", self.selected_path)
-            self.show_info(self.selected_path)
+    def action_search_movie(self):
+        dial = InputDialog()
+        if dial.exec():
+            mid = dial.get_result()
+            if mid:
+                if len(mid) > 4:
+                    m = MovieCache.get(mid)
+                    if m and m.path:
+                        self.model.makeSelect(m.path, False)
+                else:
+                    m = MovieCache.startswith(mid)
+                    r_dial = EditDictDialog(m, sort=True)
+                    r_dial.show()
+
+    @Slot()
+    def filter_change(self, idx) -> None:
+        if idx > 0:
+            f = self.filter_mid.itemText(idx)
+            print(f)
+            self.model.set_filter(f)
+        else:
+            self.model.clear_filter()
+
+    @qasync.asyncSlot()
+    async def action_list_click(self, path, _1, _2) -> None:
+        settings.setValue("movie/last_selection", path)
+        await self.show_info(path)
 
     @Slot()
     def model_root_changed(self, new_root):
+        self.filter_mid.clear()
+        self.filter_mid.insertItem(0, "None")
         settings.setValue("movie/root", new_root)
 
     @Slot()
     def action_list_double_click(self, path, _1, _2) -> None:
-        if path.split(".")[-1].lower() in MyImageDialog.FORMAT:
-            dialog = MyImageDialog(self, path, screen.availableGeometry().size())
-            dialog.exec()
-            dialog.deleteLater()
-        else:
-            os.startfile(path)
+        if os.path.isfile(path):
+            ext = os.path.splitext(path)[1].lower()
+
+            if ext in MyImageDialog.FORMAT:
+                dialog = MyImageDialog(self, path, screen.availableGeometry().size())
+                dialog.exec()
+            elif ext in QtVideoDialog.FORMAT_VIDEO:
+                if QtVideoDialog.available:
+                    dialog = MyVideoDialog(self, [path])
+                    dialog.show()
+            elif ext in QtVideoDialog.FORMAT_AUDIO:
+                if QtVideoDialog.available:
+                    dialog = MyVideoDialog(self, [path], audio_only=True)
+                    dialog.show()
+            else:
+                os.startfile(path)
 
     @Slot()
     def action_settings(self):
@@ -223,13 +273,17 @@ class MainWidget(QtWidgets.QWidget):
         for i in range(0, len(self.txt_info) - 1):
             self.txt_info[i].setText(self.txt_info[i + 1].text())
         self.txt_info[-1].setText(mess)
+        print(mess)
 
     @Slot()
     def action_info_out_no_newline(self, mess):
         self.txt_info[-1].setText(mess)
 
     @Slot()
-    def action_show_img(self, _, as_size, img: MyImageSource) -> None:
+    def action_show_img(self, path: str, as_size, img: MyImageSource, check_path: bool = False) -> None:
+        if check_path:
+            if not path.startswith(self.model.select):
+                return
         self.image_flow.show_img(as_size, img, self.action_show_large_img)
         QCoreApplication.processEvents()
 
@@ -240,18 +294,20 @@ class MainWidget(QtWidgets.QWidget):
 
     @Slot()
     def action_rename(self):
-        if self.selected_path is not None and os.path.isdir(self.selected_path):
-            if self.selected_data and self.selected_data.path == self.selected_path:
+        if self.model.select is not None and os.path.isdir(self.model.select):
+            if self.selected_data and self.selected_data.path == self.model.select:
                 self.image_flow.clearAll()
+                self.but_update.setEnabled(False)
+                selected = self.selected_data
+                self.model.makeSelect(None)
+                thread = MyThread()
+                thread.set_run(selected.rename)
+                thread.on_finish(on_result=self.action_rename_end)
+                thread.start()
 
-                prefer_path = self.selected_data.rename()
-
-                self.model.makeSelect(prefer_path, reload=True)
-
-    @Slot()
-    def action_refresh_path(self):
-        self.selected_path = None
-        self.model.setRootPath(self.model.rootPath)
+    def action_rename_end(self, path):
+        self.but_update.setEnabled(True)
+        self.model.makeSelect(path, reload=True)
 
     @Slot()
     def action_delete_info(self):
@@ -260,38 +316,15 @@ class MainWidget(QtWidgets.QWidget):
             self.selected_data.delete()
 
     @Slot()
-    def action_to_download_folder(self):
-        self.selected_path = None
-        self.model.setRootPath(settings.valueStr("movie/download"))
-        self.model.makeSelect(None)
-
-    @Slot()
-    def action_to_movie_folder(self):
-        self.selected_path = None
-        self.model.setRootPath(settings.valueStr("movie/base"))
-        self.model.makeSelect(None)
-
-    @Slot()
-    def action_recheck(self):
-        if self.selected_path is not None:
-            folder = self.selected_path.split("/")[-1]
-            dialog = CreateRecordDialog(self, settings, folder, self.txt_move_path.text())
-
-            if dialog.exec():
-                url = dialog.txt_url.text()
-                if url:
-                    self.txt_move_path.setText(url)
-                    self.selected_data['url'] = url
-
-    @Slot()
     def action_mp4_to_folder(self):
-        if os.path.isfile(self.selected_path) and self.selected_path.endswith(".mp4"):
+        path = self.model.select
+        if os.path.isfile(path) and (path.endswith(".mp4") or path.endswith(".avi")):
             base = self.model.rootPath
-            folder_name = Path(self.selected_path).stem
+            folder_name = Path(path).stem
 
-            file_list = [self.selected_path]
+            file_list = [path]
             extra_index = 1
-            head, tail = os.path.splitext(self.selected_path)
+            head, tail = os.path.splitext(path)
             while os.path.exists(f"{head} ({extra_index}){tail}"):
                 file_list.append(f"{head} ({extra_index}){tail}")
                 extra_index += 1
@@ -299,6 +332,13 @@ class MainWidget(QtWidgets.QWidget):
             m = re.compile(r"\[([0-9A-Z]+?)-?(\d+)]").match(folder_name)
             if m:
                 folder_name = f"[{m.groups()[0]}-{int(m.groups()[1]):03d}]"
+            else:
+                words = folder_name.split(" ")
+                for word in words:
+                    m = re.compile(r"([0-9A-Z]+?)-?(\d+)").match(word)
+                    if m:
+                        folder_name = f"[{m.groups()[0]}-{int(m.groups()[1]):03d}]"
+                        break
 
             new_folder = join_path(base, folder_name)
             if not os.path.exists(new_folder):
@@ -318,23 +358,22 @@ class MainWidget(QtWidgets.QWidget):
 
     @Slot()
     def action_move_movie(self):
-        print(self.selected_path)
-        if self.selected_data is not None and self.selected_path == self.selected_data.path:
-            w = MovieMoveWidget(self.selected_data, self.movie_base)
+        if self.selected_data is not None and self.model.select == self.selected_data.path:
+            w = MovieMoveWidget(self, self.selected_data, self.movie_base)
             self.image_flow.addWidget(w, front=True)
-            w.on_move.connect(self.action_move_movie_finish)
+            w.on_move.connect(self.action_move_movie_finish, Qt.QueuedConnection)
 
     @Slot()
     def action_custom_search(self):
-        if self.selected_path:
-            w = SearchMovieWidget(self.selected_path)
+        if self.model.select:
+            w = SearchMovieWidget(self, self.model.select)
             self.output_2(w, True)
-            w.output.connect(self.display_movie)
+            w.output.connect(self.search_result_signal)
 
     def action_show_actor_widget(self, actor):
         w = ActorWidget(actor)
         self.output_2(w, True)
-        w.output.connect(self.show_info)
+        w.output.connect(self.show_info, Qt.QueuedConnection)
         w.lite_movie.connect(self.show_lite_from_list)
 
     def action_show_keyword_widget(self, keyword):
@@ -344,12 +383,23 @@ class MainWidget(QtWidgets.QWidget):
 
     @Slot()
     def action_list_series(self):
-        w = PathSeriesWidget(self.model.rootPath)
+        w = PathSeriesWidget(self, self.model.rootPath)
+        for item in w.model.stringList():
+            if self.filter_mid.findText(item) < 0:
+                self.filter_mid.insertItem(self.filter_mid.count(), item)
         self.output_2(w, True)
         w.output.connect(self.action_display_movie_lite)
 
+    @Slot()
+    def action_list_actor(self):
+        dial = ActorListDialog.get(self)
+        if dial:
+            dial.show()
+            dial.detail.output.connect(self.show_info, Qt.QueuedConnection)
+            dial.detail.lite_movie.connect(self.show_lite_from_list)
+
     def action_display_movie_lite(self, w: dict, cover, path):
-        lite_widget = MovieLiteWidget(w, cover, path)
+        lite_widget = MovieLiteWidget(self, w, cover, path)
         self.output_2(lite_widget)
         lite_widget.on_view.connect(self.show_detail_from_lite)
 
@@ -363,17 +413,31 @@ class MainWidget(QtWidgets.QWidget):
     @Slot()
     def show_detail_from_lite(self, mid, path):
         if path:
-            self.show_info(os.path.join(self.model.rootPath, path))
+            # self.show_info(os.path.join(self.model.rootPath, path))
+            self.model.makeSelect(path, False)
         else:
             self.action_load_folder(mid)
+
+    @Slot()
+    def action_show_images_local(self):
+        if self.model.select and os.path.isdir(self.model.select):
+            folder = self.model.select
+            run_thread = MyThread("image_flow")
+            frames_folder = QtVideoDialog.has_preview(folder)
+            if frames_folder:
+                folder = frames_folder
+            else:
+                run_thread.on_finish(on_before=self.action_show_images_start)
+            run_thread.set_run(self.async_load_images_local, folder, self.thumb_size)
+            run_thread.start()
+
+    def action_show_images_start(self):
+        self.image_flow.clearAll()
+        self.image_flow.group_by_date = False
 
     @Slot(str, result=None)
     def action_move_movie_finish(self, path: str) -> None:
         self.model.makeSelect(path, reload=True)
-
-    def action_show_folder_images_start(self):
-        self.image_flow.clearAll()
-        self.image_flow.group_by_date = True
 
     def output_1(self, out, clear=False):
         if clear:
@@ -387,8 +451,8 @@ class MainWidget(QtWidgets.QWidget):
         if widget:
             self.image_new_flow.addWidget(out, front=True)
 
-    def async_load_folder_images(self, folder, as_size, thread):
-        files = list_jpg(folder)
+    def async_load_images_local(self, folder, as_size, thread):
+        files = list_jpg(folder, no_folder_img=True)
         self.progress_reset_signal.emit(len(files))
 
         progress = 0
@@ -396,21 +460,18 @@ class MainWidget(QtWidgets.QWidget):
         for f in files:
             progress += 1
             self.progress_signal.emit(progress)
-            if f.endswith("folder.jpg"):
-                continue
             file = f.replace("\\", "/")
-            img = MyImageSource(file, self.thumb_size)
-            self.image_signal.emit(file, as_size, img)
+            img = MyImageSource(file, as_size)
+            self.image_signal.emit(file, as_size, img, False)
             if QThread.isInterruptionRequested(thread):
                 break
-            time.sleep(self.update_delay)
+            time.sleep(0.01)
         return True
 
     @Slot()
     def action_show_large_img(self, path, thumb, auto_confirm):
         dialog = MyImageDialog(self, path, screen.availableGeometry().size(), thumb, auto_confirm)
         dialog.exec()
-        dialog.deleteLater()
 
     @Slot()
     def action_open_url(self):
@@ -419,58 +480,49 @@ class MainWidget(QtWidgets.QWidget):
         if url:
             webbrowser.open(url)
 
-    @Slot()
-    def show_info(self, selected_path):
+    @qasync.asyncSlot()
+    async def show_info(self, selected_path):
         if selected_path is not None:
             # image = imutils.url_to_image("https://pbs.twimg.com/media/E_24DrNVUAIPlFe.jpg:small")
             if os.path.isdir(selected_path) or selected_path.lower().endswith(".mp4"):
-                movie = load_info(selected_path)
+                movie = await load_info(selected_path)
                 if movie is not None and InfoMovie.LATEST == movie.version:
                     MovieCache.put(movie)
-                    self.local_movie_data(movie)
+                    self.local_movie_data(movie, selected_path)
+                    front_mid = movie.movie_id.split("-", 1)[0]
+                    if self.filter_mid.findText(front_mid) < 0:
+                        self.filter_mid.insertItem(self.filter_mid.count(), front_mid)
                 else:
                     self.action_load_folder()
 
     @Slot()
     def action_load_folder(self, mid=None, path=None):
-        if not mid:
-            mid = file_name_to_movie_id(self.selected_path)
-            path = self.selected_path
+        if not mid and self.model.select:
+            mid = file_name_to_movie_id(self.model.select)
+            path = self.model.select
         if mid:
             self.get_movie_data(path, mid)
 
     @Slot()
     def action_get_all_movie(self):
         print(self.model.rootPath)
+
         paths = list_dir(self.model.rootPath, "*/")
         paths = list(map(lambda n: n.replace("\\", "/")[:-1], paths))
 
         force = False
         if settings.valueInt("movie/force_scan") == 1:
             force = True
-
+        # await get_all_fanza(paths, self.progress_reset_signal, self.progress_signal, force=force)
         thread = MyThread("get_all_movie_data")
         thread.set_run(get_all_fanza, paths, self.progress_reset_signal, self.progress_signal, force=force)
         thread.on_finish(on_finish=lambda: TextOut.out("Update Finish"))
         thread.start()
 
-    @Slot()
-    def action_save_movie(self, movie: InfoMovie):
-        if movie.path == self.selected_path:
-            print(threading.currentThread(), movie.movie_id)
-            w = MovieWidget(movie, local=False)
-            w.on_save.connect(self.local_movie_data)
-            self.image_flow.addWidget(w)
-
     def get_movie_data(self, path: str, mid: str):
-        # print(get_fanza_result(mid))
         self.output_1(None, clear=True)
-        self.search_id = mid
-
-        thread = MyThread("get_movie_data")
-        thread.set_run(get_fanza_result, path, mid)
-        thread.on_finish(on_result=self.get_movie_data_result)
-        thread.start()
+        MovieParser.parse(path, mid, self.search_result_signal, single_mode=True,
+                          signal_out_start=TextOut.progress_start, signal_out_end=TextOut.progress_end)
 
     """
         def get_movie_data_result(self, movie: List[InfoMovie]):
@@ -498,26 +550,34 @@ class MainWidget(QtWidgets.QWidget):
                         self.output_1(w)
     """
 
-    def get_movie_data_result(self, movie: list):  # List[MovieWidget]):
-        for m in movie:
-            w = MovieWidget(m[0], loaded_f=m[1], loaded_b=m[2])
+    def movie_result_multi(self, movies: list) -> None:  # List[MovieWidget]):
+        for m in movies:
+            self.movie_result_single(m)
+
+    def movie_result_single(self, movie: list) -> None:
+        if len(movie) < 3:
+            self.output_1(None, clear=True)
+        else:
+            w = MovieWidget(self, movie[0], loaded_f=movie[1], loaded_b=movie[2])
             w.on_save.connect(self.local_movie_data)
             self.output_1(w)
-            QCoreApplication.processEvents()
+        QCoreApplication.processEvents()
 
-    def local_movie_data(self, movie: InfoMovie):
-        movie.set_local_path(self.selected_path)
+    def local_movie_data(self, movie: InfoMovie, selected_path=None):
+        if selected_path is None:
+            selected_path = self.model.select
+        movie.set_local_path(selected_path)
         # movie.path.replace("\\", "/")
         self.selected_data = movie
-        w = MovieWidget(movie, local=True)
+        w = MovieWidget(self, movie, local=True)
         self.output_1(w, clear=True)
         w.on_actor.connect(self.action_show_actor_widget)
         w.on_keyword.connect(self.action_show_keyword_widget)
 
-    @QtCore.Slot()
-    def safe_exit(self):
-        save_movie_db()
-        settings.setValue("movie/last_selection", self.selected_path)
+    @qasync.asyncSlot()
+    async def safe_exit(self):
+        await save_movie_db()
+        settings.setValue("movie/last_selection", self.model.select)
         settings.setValue("movie/splitterSizes", self.splitter_right.saveState())
         settings.setValue("main/width", self.width())
         settings.setValue("main/height", self.height())
@@ -526,6 +586,14 @@ class MainWidget(QtWidgets.QWidget):
         self.close()
         self.destroy()
         app.exit()
+
+
+def main():
+    loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(loop)
+
+    widget.show()
+    sys.exit(app.exec())
 
 
 if __name__ == '__main__':
@@ -550,8 +618,8 @@ if __name__ == '__main__':
     if app is None:
         app = QtWidgets.QApplication(sys.argv)
 
-    user_theme = settings.value("main/theme", "dark_pink.xml")
-    apply_stylesheet(app, theme=user_theme)
+    user_theme = settings.value("main/theme", "dark_teal.xml")
+    apply_stylesheet(app, theme="dark_lightgreen.xml")
 
     # file = glob.glob("X:\Image\Twitter/*")
     # model = QFileSystemModel()
@@ -568,6 +636,5 @@ if __name__ == '__main__':
     widget.setWindowTitle(" ")
     # widget.setWindowIcon(QApplication.style().standardIcon(QStyle.SP_MediaPlay))
     widget.setWindowFlags(Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-    widget.show()
 
-    sys.exit(app.exec())
+    main()

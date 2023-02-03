@@ -6,13 +6,13 @@ import urllib.parse
 from PySide6.QtCore import QThread, Signal
 
 from TextOut import TextOut
-from myparser import get_html
 from myparser.InfoMovie import InfoKeyword, InfoSeries, InfoMaker, InfoLabel, InfoActor, InfoMovie, InfoDirector, \
     load_info
-from myparser.JavBusMain import parse_javbus_movie
 from myparser.MovieCache import MovieCache
 from myparser.MovieNameFix import movie_name_fix
-from myqt.MyQtImage import MyImageSource
+from myparser.ParserCommon import get_html
+from myqt.MyQtWorker import MyThreadPool
+from myqt.QtImage import MyImageSource
 
 api_id = "cKLxQzpehtWUh0bpBvTZ"
 affiliate_id = "joyusexy-990"
@@ -21,14 +21,18 @@ service = ["mono", "digital", "rental"]
 
 def get_all_fanza(paths, progress_reset_signal, progress_signal,
                   thread: QThread = None, force=False):
+    MyThreadPool.asyncio(get_all_fanza_run, [paths, progress_reset_signal, progress_signal, thread, force])
 
+
+async def get_all_fanza_run(loop, paths, progress_reset_signal, progress_signal,
+                            thread: QThread = None, force=False):
     progress_reset_signal.emit(len(paths))
     progress = 0
     for p in paths:
         progress += 1
         progress_signal.emit(progress)
         if not force and os.path.exists(os.path.join(p, InfoMovie.FILE)):
-            m = load_info(p)
+            m = await load_info(p)
             if m:
                 MovieCache.put(m)
                 if m.actors:
@@ -54,20 +58,20 @@ def get_all_fanza(paths, progress_reset_signal, progress_signal,
             try:
                 m = get_fanza_result(p, key, thread, single_mode=True)
                 if len(m):
-                    TextOut.out(f"Save: {p} : {m[0].title}")
-                    m[0].save()
+                    TextOut.out(f"Save: {p} : {m[0][0].title}")
+                    m[0][0].save()
             except Exception as e:
-                TextOut.out(e)
+                TextOut.out(str(e))
 
 
 def get_fanza_result(path, keyword, thread, single_mode=False) -> list:
     m = re.compile(r"(^[A-Z]+?)-?(\d+)").match(keyword)
     if m:
         modify_keyword = f"{m.groups()[0]}-{int(m.groups()[1]):05d}"
-        out = get_fanza(path, modify_keyword, thread, single_mode)
-        out.extend(get_fanza(path, keyword, thread, single_mode))
+        out = search_movie(path, modify_keyword, thread, single_mode)
+        out.extend(search_movie(path, keyword, thread, single_mode))
     else:
-        out = get_fanza(path, keyword, thread, single_mode)
+        out = search_movie(path, keyword, thread, single_mode)
 
     if thread.isInterruptionRequested():
         return []
@@ -84,8 +88,14 @@ def get_fanza_result(path, keyword, thread, single_mode=False) -> list:
                 b = None
                 if m.front_img_url:
                     f = MyImageSource(m.front_img_url, q_pix=False)
+                    if f.data is None:
+                        m.front_img_url = None
+                        f = None
                 if m.back_img_url:
                     b = MyImageSource(m.back_img_url, q_pix=False)
+                    if b.data is None:
+                        m.back_img_url = None
+                        b = None
                 result.append((m, f, b))
         else:
             for m in out:
@@ -93,14 +103,20 @@ def get_fanza_result(path, keyword, thread, single_mode=False) -> list:
                 b = None
                 if m.front_img_url:
                     f = MyImageSource(m.front_img_url, q_pix=False)
+                    if f.data is None:
+                        m.front_img_url = None
+                        f = None
                 if m.back_img_url:
                     b = MyImageSource(m.back_img_url, q_pix=False)
+                    if b.data is None:
+                        m.back_img_url = None
+                        b = None
                 result.append((m, f, b))
         return result
     return []
 
 
-def get_fanza(path, keyword, thread: QThread, single_mode=False) -> list[InfoMovie]:
+def search_movie(path, keyword, thread: QThread, single_mode=False) -> list[InfoMovie]:
     movie_result = []
     param = {"api_id": api_id,
              "affiliate_id": affiliate_id,
@@ -132,8 +148,16 @@ def get_fanza(path, keyword, thread: QThread, single_mode=False) -> list[InfoMov
 
                 title = movie_name_fix(item['title'])
 
+                if single_mode:
+                    if 'DOD' in title or 'ベストヒッツ' in title or 'アウトレット' in title:
+                        continue
+
                 if "volume" in item:
-                    length = int(item['volume'])
+                    try:
+                        length = int(item['volume'])
+                    except Exception as e:
+                        length = 0
+                        print(e)
                 else:
                     length = 0
 
@@ -191,10 +215,6 @@ def get_fanza(path, keyword, thread: QThread, single_mode=False) -> list[InfoMov
                     return [movie]
                 else:
                     movie_result.append(movie)
-
-    if not len(movie_result):
-        movie_result = parse_javbus_movie(path, keyword)
-
     return movie_result  # list(map(MovieWidget, movie_result))
 
 

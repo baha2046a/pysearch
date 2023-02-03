@@ -1,21 +1,22 @@
 import os
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import *
 from PySide6.QtWidgets import QWidget, QLineEdit
 
 from MyCommon import join_path
 from myparser.InfoMovie import InfoMovie, InfoMaker
-from myqt.MyQtCommon import MyVBox, MyButton, MyHBox
-from myqt.MyQtSetting import EditDictDialog
-from myqt.MyQtWorker import MyThread
+from myqt.EditDict import EditDictDialog
+from myqt.MyQtCommon import QtVBox, MyButton, QtHBox
+from myqt.MyQtWorker import MyThreadPool
 
 
 class MovieMoveWidget(QWidget):
     on_move = Signal(str)
     progress = Signal(str)
+    can_remove = Signal(bool)
 
-    def __init__(self, movie: InfoMovie, movie_base: str, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, parent, movie: InfoMovie, movie_base: str, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
         self.movie = movie
         self.movie_base = movie_base
         self.maker_path = join_path(movie_base, f"({InfoMaker.dir(movie.maker)})")
@@ -26,7 +27,7 @@ class MovieMoveWidget(QWidget):
         exist = os.path.exists(self.maker_path)
         self.but_move = MyButton("Move", self.move)
 
-        self.layout = MyVBox()
+        self.layout = QtVBox()
 
         if exist:
             self.layout.add(self.m_m)
@@ -34,7 +35,7 @@ class MovieMoveWidget(QWidget):
         else:
             self.but_mapping = MyButton("Map", self.edit_mapping)
             self.but_create = MyButton("Create", self.create)
-            self.layout.add(MyHBox().addAll(self.m_m, self.but_mapping, self.but_create))
+            self.layout.add(QtHBox().addAll(self.m_m, self.but_mapping, self.but_create))
 
         self.progress.connect(self.show_progress)
 
@@ -46,6 +47,7 @@ class MovieMoveWidget(QWidget):
         dial = EditDictDialog(InfoMaker.mod_dir, self.movie.maker)
         if dial.exec():
             InfoMaker.mod_dir = dial.get_result()
+            InfoMaker.save()
             self.maker_path = join_path(self.movie_base, f"({InfoMaker.dir(self.movie.maker)})")
             self.m_m.setText(self.maker_path)
             if os.path.exists(self.maker_path):
@@ -59,7 +61,7 @@ class MovieMoveWidget(QWidget):
         if new_path == self.movie.path:
             self.m_t.setText("Already Located in Prefer Path")
             self.but_move.setEnabled(False)
-        self.layout.add(MyHBox().addAll(self.m_t, self.but_move))
+        self.layout.add(QtHBox().addAll(self.m_t, self.but_move))
 
     @Slot()
     def create(self):
@@ -74,16 +76,15 @@ class MovieMoveWidget(QWidget):
         path = self.m_t.text()
         self.but_move.setEnabled(False)
         self.layout.add(self.txt_progress)
+        self.can_remove.emit(False)
 
-        thread = MyThread("move_movie")
-        thread.set_run(self.movie.move, path, self.progress)
-        thread.on_finish(on_finish=self.finish)
-        thread.start()
+        MyThreadPool.start("move_movie", None, self.finish, self.finish,
+                           self.movie.move, path, self.progress, pending_when_exist=False)
 
     @Slot()
     def show_progress(self, txt):
         self.txt_progress.setText(txt)
 
     def finish(self):
+        self.can_remove.emit(True)
         self.on_move.emit(self.m_t.text())
-

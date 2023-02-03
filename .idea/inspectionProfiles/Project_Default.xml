@@ -17,6 +17,9 @@
           <option value="myparser.InfoMovie.InfoMovie.__setitem__" />
           <option value="PySide6.QtCore.started.connect" />
           <option value="PySide6.QtCore.finished.connect" />
+          <option value="PySide6.QtCore.Signal.connect" />
+          <option value="PySide6.QtCore.Signal.emit" />
+          <option value="PySide6.QtCore.Qt.WindowType.__or__" />
         </list>
       </option>
     </inspection_tool>
